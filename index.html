@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TapeForge — Visual NAND Circuit Designer for TapeOut on X Layer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo" aria-hidden="true">▣</div>
+    <div>
+      <h1>TapeForge</h1>
+      <p class="tagline">Design a NAND circuit. Verify it exhaustively. Price it on X Layer. Tape it out.</p>
+    </div>
+  </div>
+  <div class="badges">
+    <span class="badge">X Layer · chain 196</span>
+    <span class="badge">1 gate = 1 transistor</span>
+    <span class="badge">No wallet needed</span>
+  </div>
+</header>
+
+<div id="toolbar" role="toolbar" aria-label="Editor actions">
+  <button id="btn-add-gate" title="Add a NAND gate to the canvas">+ NAND gate</button>
+  <button id="btn-add-input" title="Add an input pin">+ Input pin</button>
+  <button id="btn-add-output" title="Add an output pin">+ Output pin</button>
+  <span class="sep"></span>
+  <button id="btn-undo" title="Undo (Ctrl+Z)">↩ Undo</button>
+  <button id="btn-redo" title="Redo (Ctrl+Y)">↪ Redo</button>
+  <button id="btn-delete" title="Delete the selected gate or pin">Delete</button>
+  <button id="btn-clear" title="Clear the whole circuit">Clear</button>
+  <span class="sep"></span>
+  <button id="btn-verify" class="primary" title="Simulate every input combination and check the outputs">▶ Verify circuit</button>
+  <span id="circuit-name" title="Loaded template or custom circuit">Custom circuit</span>
+</div>
+
+<main>
+  <aside id="templates" aria-label="Templates">
+    <h2>Templates</h2>
+    <p class="panel-note">One click loads a working NAND-only circuit. Every template is verified against its expected function.</p>
+    <div id="template-list"></div>
+    <h2>How to wire</h2>
+    <ol class="howto">
+      <li>Click a <b>port</b> (the small ring) on a gate output or an input pin.</li>
+      <li>Click a <b>port</b> on a gate input or an output pin to complete the wire.</li>
+      <li>Click an <b>input pin</b> to toggle it 0 / 1 and watch the outputs live.</li>
+      <li>Drag a gate to move it. Click a wire to remove it.</li>
+      <li>Right-click a gate or pin to delete it. Double-click a pin label to rename it.</li>
+    </ol>
+  </aside>
+
+  <section id="editor-wrap" aria-label="Circuit editor">
+    <div id="hint-bar">
+      <span><b>How to use:</b> 1. Pick a template on the left — or add your own gates. 2. Click a port, then click another port to wire them. 3. Press <b>Verify circuit</b>, check the price, export the netlist.</span>
+      <button id="hint-close" class="small" title="Hide this hint">✕</button>
+    </div>
+    <div id="canvas-bar">
+      <div class="zoom" role="group" aria-label="Canvas zoom">
+        <button id="btn-zoom-out" title="Zoom out">−</button>
+        <span id="zoom-label" title="Current zoom">100%</span>
+        <button id="btn-zoom-in" title="Zoom in">+</button>
+        <button id="btn-zoom-fit" title="Fit the whole circuit in view">Fit</button>
+        <button id="btn-zoom-100" title="Zoom to 100%">100%</button>
+      </div>
+      <span id="canvas-size" title="Canvas size in circuit units"></span>
+    </div>
+    <div id="canvas-scroll">
+      <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+    <div id="live-status">—</div>
+  </section>
+
+  <aside id="side">
+    <section class="panel" id="verify-panel" aria-label="Verification results">
+      <h2>Verification</h2>
+      <p class="panel-note">Exhaustive simulation: every input combination, checked against the expected function (up to 16 inputs = 65,536 cases; larger circuits are sampled deterministically).</p>
+      <div id="verify-summary">Press <b>Verify circuit</b> to run it.</div>
+      <div id="verify-table-wrap"></div>
+    </section>
+
+    <section class="panel" id="cost-panel" aria-label="Cost estimator">
+      <h2>Cost — TapeOut on X Layer</h2>
+      <p class="panel-note">1 NAND gate = 1 transistor. Prices are read from real processor contracts on X Layer.</p>
+      <div id="data-source">Data: <b>cached snapshot</b> · <span id="snapshot-date">25 Nov 2026, 12:53 UTC</span> · <button id="btn-refresh" class="small">↻ Refresh live</button> <span id="refresh-status"></span></div>
+      <table id="processor-table">
+        <thead><tr><th>Processor</th><th>Price / transistor</th><th>Circuits</th><th>Supply</th></tr></thead>
+        <tbody id="processor-body"></tbody>
+      </table>
+      <div id="cost-breakdown"></div>
+      <label class="check"><input type="checkbox" id="chk-open-fee"> Include processor-opening fee (0.0066 OKB) — only if you open your own processor</label>
+      <p class="panel-note" id="okb-note">OKB ≈ $79 (25 Nov 2026) — USD figure is an estimate only.</p>
+    </section>
+
+    <section class="panel" id="export-panel" aria-label="Netlist export">
+      <h2>Export netlist</h2>
+      <p class="panel-note">The exact NAND netlist for this circuit, ready to tape out.</p>
+      <pre id="netlist-view"></pre>
+      <div class="btn-row">
+        <button id="btn-download" class="primary">⬇ Download .txt</button>
+        <button id="btn-copy">⧉ Copy</button>
+      </div>
+      <h3>How to tape it out</h3>
+      <ol class="howto">
+        <li>Pick a processor above (cheapest with supply is highlighted) and mint as many of its transistors as you have gates.</li>
+        <li>Burn those transistors to etch this netlist as a circuit (ERC-721). Tape-out fee ≈ 0.0013 OKB.</li>
+        <li>Anyone can then call the circuit read-only, for free, and check its outputs.</li>
+      </ol>
+    </section>
+  </aside>
+</main>
+
+<footer>
+  <p>TapeForge reads TapeOut processor data on <b>X Layer (chain ID 196)</b> — factory <code>0x1f09daefa827f02cbb40967cc91b259763760761</code>.
+  Interfaces and computation run off-chain, per the TapeOut Accelerate FAQ. No wallet is needed to design, verify, price or export.
+  Processor prices below are a snapshot read from chain on 25 Nov 2026; press “Refresh live” to re-read them from the public X Layer RPC.</p>
+</footer>
+
+<script src="circuit.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

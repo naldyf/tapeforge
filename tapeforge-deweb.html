@@ -1,0 +1,1555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TapeForge — Visual NAND Circuit Designer for TapeOut on X Layer</title>
+<style>
+/* TapeForge — dark "chip fab" aesthetic. No external fonts or assets. */
+:root {
+  --bg: #07090c;
+  --panel: #0e1319;
+  --panel-2: #111826;
+  --border: #1e2836;
+  --text: #dbe4ee;
+  --muted: #8a97a8;
+  --cyan: #22d3ee;
+  --cyan-dim: #155e75;
+  --green: #34d399;
+  --red: #f87171;
+  --amber: #fbbf24;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+code { font-family: var(--mono); font-size: 12px; color: var(--cyan); }
+
+/* ---------- header ---------- */
+header {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 16px; flex-wrap: wrap;
+  padding: 14px 20px;
+  background: linear-gradient(180deg, #0d1420, #0a0f16);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.logo {
+  font-size: 30px; line-height: 1; color: var(--cyan);
+  text-shadow: 0 0 14px rgba(34, 211, 238, .55);
+}
+header h1 { margin: 0; font-size: 24px; letter-spacing: .5px; }
+.tagline { margin: 0; color: var(--muted); font-size: 13px; }
+.badges { display: flex; gap: 8px; flex-wrap: wrap; }
+.badge {
+  font-family: var(--mono); font-size: 11px; color: var(--cyan);
+  border: 1px solid var(--cyan-dim); border-radius: 999px;
+  padding: 3px 10px; background: rgba(34, 211, 238, .07); white-space: nowrap;
+}
+
+/* ---------- toolbar ---------- */
+#toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+#toolbar .sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+#circuit-name {
+  margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--muted);
+}
+button {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 12px; font-size: 13px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--cyan-dim); color: #fff; }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: #0e7490; border-color: #22d3ee; color: #fff; font-weight: 600; }
+button.primary:hover { background: #0891b2; }
+button.small { padding: 2px 8px; font-size: 12px; }
+button.danger { border-color: #7f1d1d; color: var(--red); }
+
+/* ---------- layout ---------- */
+main {
+  flex: 1; display: grid;
+  grid-template-columns: 250px minmax(0, 1fr) 380px;
+  gap: 0; min-height: 0;
+}
+aside, #editor-wrap { min-height: 0; }
+#templates {
+  border-right: 1px solid var(--border); background: var(--panel);
+  padding: 14px; overflow-y: auto;
+}
+#side {
+  border-left: 1px solid var(--border); background: var(--panel);
+  overflow-y: auto; display: flex; flex-direction: column;
+}
+#editor-wrap { display: flex; flex-direction: column; min-width: 0; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); margin: 0 0 8px; }
+h3 { font-size: 13px; margin: 14px 0 6px; color: var(--text); }
+.panel { padding: 14px; border-bottom: 1px solid var(--border); }
+.panel-note { color: var(--muted); font-size: 12.5px; margin: 0 0 10px; }
+
+/* ---------- templates ---------- */
+#template-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+.tpl {
+  text-align: left; padding: 10px 12px; border-radius: 8px;
+  background: var(--panel-2); border: 1px solid var(--border);
+}
+.tpl:hover { border-color: var(--cyan-dim); }
+.tpl.active { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan) inset; }
+.tpl b { display: block; font-size: 13.5px; }
+.tpl .gates { font-family: var(--mono); font-size: 11px; color: var(--cyan); }
+.tpl p { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+.howto { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; }
+.howto li { margin-bottom: 6px; }
+.howto b { color: var(--text); }
+
+/* ---------- editor canvas ---------- */
+#hint-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; font-size: 12.5px; color: var(--muted);
+  background: rgba(34, 211, 238, .06); border-bottom: 1px solid var(--border);
+}
+#hint-bar[hidden] { display: none; }
+#hint-bar b { color: var(--text); }
+#hint-bar span { flex: 1; min-width: 0; }
+#hint-close { flex: none; }
+#canvas-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 6px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+#canvas-bar .zoom { display: flex; align-items: center; gap: 6px; }
+#canvas-bar .zoom button { padding: 2px 9px; font-size: 12px; min-width: 28px; }
+#zoom-label {
+  font-family: var(--mono); font-size: 12px; color: var(--cyan);
+  min-width: 42px; text-align: center;
+}
+#canvas-size { font-family: var(--mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+#canvas-scroll {
+  flex: 1; overflow: auto; min-height: 320px;
+  background-color: #080b0f;
+  background-image:
+    linear-gradient(rgba(34, 211, 238, .05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, .05) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+#canvas { display: block; }
+#live-status {
+  padding: 8px 14px; border-top: 1px solid var(--border);
+  font-family: var(--mono); font-size: 12px; color: var(--muted);
+  background: var(--panel);
+}
+#live-status .warn { color: var(--amber); }
+#live-status .err { color: var(--red); }
+#live-status .ok { color: var(--green); }
+
+/* SVG nodes */
+.gate rect.body { fill: #111827; stroke: #38bdf8; stroke-width: 1.5; }
+.gate.selected rect.body { stroke: var(--amber); stroke-width: 2.5; }
+.gate text { fill: var(--text); font: 11px var(--mono); pointer-events: none; }
+.gate text.idx { fill: var(--muted); font-size: 10px; }
+.pin rect.body { fill: #0f1b26; stroke: #38bdf8; stroke-width: 1.5; }
+.pin.out rect.body { stroke: #34d399; }
+.pin text { fill: var(--text); font: 11px var(--mono); pointer-events: none; }
+.pin text.val { font-size: 12px; font-weight: 700; }
+.port { fill: #0b1220; stroke: var(--cyan); stroke-width: 1.5; cursor: crosshair; }
+.port.target-ok { stroke: var(--green); stroke-width: 2.5; }
+.port.source { fill: var(--cyan); }
+.wire { fill: none; stroke: #38bdf8; stroke-width: 1.8; opacity: .85; }
+.wire:hover { stroke: var(--amber); }
+.wire-hit { fill: none; stroke: transparent; stroke-width: 12; cursor: pointer; }
+.wire-pending { fill: none; stroke: var(--amber); stroke-width: 1.8; stroke-dasharray: 6 4; }
+
+/* ---------- verify ---------- */
+#verify-summary { font-size: 13.5px; margin-bottom: 8px; }
+#verify-summary .pass { color: var(--green); font-weight: 700; }
+#verify-summary .fail { color: var(--red); font-weight: 700; }
+#verify-table-wrap { max-height: 300px; overflow: auto; }
+#verify-table-wrap table { width: auto; min-width: 100%; }
+#verify-table-wrap th, #verify-table-wrap td { white-space: nowrap; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; }
+th, td { border: 1px solid var(--border); padding: 4px 6px; text-align: left; }
+th { background: var(--panel-2); color: var(--muted); font-weight: 600; position: sticky; top: 0; }
+td.mono, th.mono { font-family: var(--mono); }
+td.pass { color: var(--green); }
+td.fail { color: var(--red); font-weight: 700; }
+
+/* ---------- cost ---------- */
+#data-source { font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+#data-source b.live { color: var(--green); }
+#processor-table td, #processor-table th { font-size: 12px; }
+#processor-table tbody tr { cursor: pointer; }
+#processor-table tbody tr:hover { background: rgba(34, 211, 238, .06); }
+#processor-table tbody tr.selected { background: rgba(34, 211, 238, .14); outline: 1px solid var(--cyan-dim); }
+#processor-table td.mono { font-family: var(--mono); font-size: 11px; }
+.tag {
+  font-size: 10px; font-family: var(--mono); border-radius: 3px; padding: 1px 5px;
+  background: rgba(52, 211, 153, .15); color: var(--green); margin-left: 4px; white-space: nowrap;
+}
+.tag.soldout { background: rgba(248, 113, 113, .15); color: var(--red); }
+.tag.cheapest { background: rgba(34, 211, 238, .15); color: var(--cyan); }
+#cost-breakdown { margin-top: 12px; font-size: 13.5px; }
+#cost-breakdown .row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+#cost-breakdown .row.total { font-weight: 700; font-size: 16px; border-bottom: none; padding-top: 8px; }
+#cost-breakdown .row.total span:last-child { color: var(--cyan); font-family: var(--mono); }
+#cost-breakdown .num { font-family: var(--mono); }
+.check { display: block; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+
+/* ---------- export ---------- */
+#netlist-view {
+  background: #080b0f; border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px; font-family: var(--mono); font-size: 11.5px; line-height: 1.45;
+  max-height: 260px; overflow: auto; white-space: pre; margin: 0 0 10px; color: #c9d6e3;
+}
+.btn-row { display: flex; gap: 8px; }
+
+/* ---------- footer ---------- */
+footer {
+  border-top: 1px solid var(--border); background: var(--panel);
+  padding: 12px 20px; color: var(--muted); font-size: 12.5px;
+}
+footer p { margin: 0; }
+
+@media (max-width: 1240px) {
+  main { grid-template-columns: 220px minmax(0, 1fr); }
+  #side {
+    grid-column: 1 / -1; border-left: none; border-top: 1px solid var(--border);
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    overflow-y: visible;
+  }
+}
+
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo" aria-hidden="true">▣</div>
+    <div>
+      <h1>TapeForge</h1>
+      <p class="tagline">Design a NAND circuit. Verify it exhaustively. Price it on X Layer. Tape it out.</p>
+    </div>
+  </div>
+  <div class="badges">
+    <span class="badge">X Layer · chain 196</span>
+    <span class="badge">1 gate = 1 transistor</span>
+    <span class="badge">No wallet needed</span>
+  </div>
+</header>
+
+<div id="toolbar" role="toolbar" aria-label="Editor actions">
+  <button id="btn-add-gate" title="Add a NAND gate to the canvas">+ NAND gate</button>
+  <button id="btn-add-input" title="Add an input pin">+ Input pin</button>
+  <button id="btn-add-output" title="Add an output pin">+ Output pin</button>
+  <span class="sep"></span>
+  <button id="btn-undo" title="Undo (Ctrl+Z)">↩ Undo</button>
+  <button id="btn-redo" title="Redo (Ctrl+Y)">↪ Redo</button>
+  <button id="btn-delete" title="Delete the selected gate or pin">Delete</button>
+  <button id="btn-clear" title="Clear the whole circuit">Clear</button>
+  <span class="sep"></span>
+  <button id="btn-verify" class="primary" title="Simulate every input combination and check the outputs">▶ Verify circuit</button>
+  <span id="circuit-name" title="Loaded template or custom circuit">Custom circuit</span>
+</div>
+
+<main>
+  <aside id="templates" aria-label="Templates">
+    <h2>Templates</h2>
+    <p class="panel-note">One click loads a working NAND-only circuit. Every template is verified against its expected function.</p>
+    <div id="template-list"></div>
+    <h2>How to wire</h2>
+    <ol class="howto">
+      <li>Click a <b>port</b> (the small ring) on a gate output or an input pin.</li>
+      <li>Click a <b>port</b> on a gate input or an output pin to complete the wire.</li>
+      <li>Click an <b>input pin</b> to toggle it 0 / 1 and watch the outputs live.</li>
+      <li>Drag a gate to move it. Click a wire to remove it.</li>
+      <li>Right-click a gate or pin to delete it. Double-click a pin label to rename it.</li>
+    </ol>
+  </aside>
+
+  <section id="editor-wrap" aria-label="Circuit editor">
+    <div id="hint-bar">
+      <span><b>How to use:</b> 1. Pick a template on the left — or add your own gates. 2. Click a port, then click another port to wire them. 3. Press <b>Verify circuit</b>, check the price, export the netlist.</span>
+      <button id="hint-close" class="small" title="Hide this hint">✕</button>
+    </div>
+    <div id="canvas-bar">
+      <div class="zoom" role="group" aria-label="Canvas zoom">
+        <button id="btn-zoom-out" title="Zoom out">−</button>
+        <span id="zoom-label" title="Current zoom">100%</span>
+        <button id="btn-zoom-in" title="Zoom in">+</button>
+        <button id="btn-zoom-fit" title="Fit the whole circuit in view">Fit</button>
+        <button id="btn-zoom-100" title="Zoom to 100%">100%</button>
+      </div>
+      <span id="canvas-size" title="Canvas size in circuit units"></span>
+    </div>
+    <div id="canvas-scroll">
+      <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+    <div id="live-status">—</div>
+  </section>
+
+  <aside id="side">
+    <section class="panel" id="verify-panel" aria-label="Verification results">
+      <h2>Verification</h2>
+      <p class="panel-note">Exhaustive simulation: every input combination, checked against the expected function (up to 16 inputs = 65,536 cases; larger circuits are sampled deterministically).</p>
+      <div id="verify-summary">Press <b>Verify circuit</b> to run it.</div>
+      <div id="verify-table-wrap"></div>
+    </section>
+
+    <section class="panel" id="cost-panel" aria-label="Cost estimator">
+      <h2>Cost — TapeOut on X Layer</h2>
+      <p class="panel-note">1 NAND gate = 1 transistor. Prices are read from real processor contracts on X Layer.</p>
+      <div id="data-source">Data: <b>cached snapshot</b> · <span id="snapshot-date">25 Nov 2026, 12:53 UTC</span> · <button id="btn-refresh" class="small">↻ Refresh live</button> <span id="refresh-status"></span></div>
+      <table id="processor-table">
+        <thead><tr><th>Processor</th><th>Price / transistor</th><th>Circuits</th><th>Supply</th></tr></thead>
+        <tbody id="processor-body"></tbody>
+      </table>
+      <div id="cost-breakdown"></div>
+      <label class="check"><input type="checkbox" id="chk-open-fee"> Include processor-opening fee (0.0066 OKB) — only if you open your own processor</label>
+      <p class="panel-note" id="okb-note">OKB ≈ $79 (25 Nov 2026) — USD figure is an estimate only.</p>
+    </section>
+
+    <section class="panel" id="export-panel" aria-label="Netlist export">
+      <h2>Export netlist</h2>
+      <p class="panel-note">The exact NAND netlist for this circuit, ready to tape out.</p>
+      <pre id="netlist-view"></pre>
+      <div class="btn-row">
+        <button id="btn-download" class="primary">⬇ Download .txt</button>
+        <button id="btn-copy">⧉ Copy</button>
+      </div>
+      <h3>How to tape it out</h3>
+      <ol class="howto">
+        <li>Pick a processor above (cheapest with supply is highlighted) and mint as many of its transistors as you have gates.</li>
+        <li>Burn those transistors to etch this netlist as a circuit (ERC-721). Tape-out fee ≈ 0.0013 OKB.</li>
+        <li>Anyone can then call the circuit read-only, for free, and check its outputs.</li>
+      </ol>
+    </section>
+  </aside>
+</main>
+
+<footer>
+  <p>TapeForge reads TapeOut processor data on <b>X Layer (chain ID 196)</b> — factory <code>0x1f09daefa827f02cbb40967cc91b259763760761</code>.
+  Interfaces and computation run off-chain, per the TapeOut Accelerate FAQ. No wallet is needed to design, verify, price or export.
+  Processor prices below are a snapshot read from chain on 25 Nov 2026; press “Refresh live” to re-read them from the public X Layer RPC.</p>
+</footer>
+
+<script>
+// TapeForge — pure circuit logic (no DOM). Works in the browser (window.TapeForgeCircuit)
+// and in Node (module.exports) so the templates can be exhaustively tested.
+//
+// Circuit model
+//   inputs : [{ id, name }]
+//   gates  : [{ id, a, b }]          a, b are source refs
+//   outputs: [{ id, name, src }]    src is a source ref
+// A source ref is { k: 'i', id } (an input pin) or { k: 'g', id } (a gate output).
+// A gate input may be null while the user is still wiring it (treated as 0, flagged).
+// Every gate is a 2-input NAND: out = NOT (a AND b). One NAND gate = one transistor
+// on TapeOut (ERC-1155 transistor token), which is why the cost model is
+// "gate count x transistor price".
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.TapeForgeCircuit = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  // ---------------------------------------------------------------- builders
+  function createBuilder(inputNames) {
+    const b = {
+      inputs: inputNames.map(function (name, i) { return { id: 'in' + i, name: name }; }),
+      gates: [],
+      outputs: [],
+      inByIndex: function (i) { return { k: 'i', id: this.inputs[i].id }; },
+      nand: function (a, b) {
+        var id = 'g' + this.gates.length;
+        this.gates.push({ id: id, a: a, b: b });
+        return { k: 'g', id: id };
+      },
+      not: function (x) { return this.nand(x, x); },
+      and: function (a, b) { return this.not(this.nand(a, b)); },
+      or: function (a, b) { return this.nand(this.not(a), this.not(b)); },
+      xor: function (a, b) {
+        var t = this.nand(a, b);
+        return this.nand(this.nand(a, t), this.nand(b, t));
+      },
+      // Half adder, 5 NANDs (shares the NAND(a,b) node between sum and carry).
+      halfAdder: function (a, b) {
+        var n1 = this.nand(a, b);
+        var sum = this.nand(this.nand(a, n1), this.nand(b, n1));
+        var cout = this.not(n1);
+        return { sum: sum, cout: cout };
+      },
+      // Full adder, 9 NANDs (the canonical 9-transistor full adder).
+      fullAdder: function (a, b, cin) {
+        var n1 = this.nand(a, b);
+        var x = this.nand(this.nand(a, n1), this.nand(b, n1)); // a xor b
+        var n4 = this.nand(x, cin);
+        var sum = this.nand(this.nand(x, n4), this.nand(cin, n4));
+        var cout = this.nand(n1, n4); // (a & b) | (cin & (a xor b))
+        return { sum: sum, cout: cout };
+      },
+      // 2-to-1 mux, 8 NANDs. Returns sel ? b : a.
+      mux: function (a, b, sel) {
+        return this.or(this.and(this.not(sel), a), this.and(sel, b));
+      },
+      out: function (name, src) {
+        var id = 'out' + this.outputs.length;
+        this.outputs.push({ id: id, name: name, src: src });
+        return id;
+      },
+      build: function () {
+        return { inputs: this.inputs, gates: this.gates, outputs: this.outputs };
+      }
+    };
+    return b;
+  }
+
+  // ---------------------------------------------------------------- templates
+  function buildAdder() {
+    var names = [];
+    for (var i = 0; i < 8; i++) names.push('A' + i);
+    for (var j = 0; j < 8; j++) names.push('B' + j);
+    var b = createBuilder(names);
+    var A = function (i) { return b.inByIndex(i); };
+    var B = function (i) { return b.inByIndex(8 + i); };
+    var carry = null;
+    for (var i = 0; i < 8; i++) {
+      var r = (i === 0) ? b.halfAdder(A(0), B(0)) : b.fullAdder(A(i), B(i), carry);
+      b.out('S' + i, r.sum);
+      carry = r.cout;
+    }
+    b.out('COUT', carry);
+    return b.build();
+  }
+  function adderExpected(bits) {
+    var a = 0, bb = 0;
+    for (var i = 0; i < 8; i++) { a |= bits[i] << i; bb |= bits[8 + i] << i; }
+    var s = a + bb, out = [];
+    for (var k = 0; k < 8; k++) out.push((s >> k) & 1);
+    out.push((s >> 8) & 1);
+    return out;
+  }
+
+  function buildComparator() {
+    var names = [];
+    for (var i = 0; i < 8; i++) names.push('A' + i);
+    for (var j = 0; j < 8; j++) names.push('B' + j);
+    var b = createBuilder(names);
+    var A = function (i) { return b.inByIndex(i); };
+    var B = function (i) { return b.inByIndex(8 + i); };
+    var eq = [], gt = [];
+    for (var i = 0; i < 8; i++) {
+      eq[i] = b.not(b.xor(A(i), B(i)));          // XNOR
+      gt[i] = b.and(A(i), b.not(B(i)));          // single-bit A > B
+    }
+    var eqAll = eq[0];
+    for (var i = 1; i < 8; i++) eqAll = b.and(eqAll, eq[i]);
+    var terms = [];
+    terms[7] = gt[7];
+    var p = eq[7];
+    for (var k = 6; k >= 0; k--) {
+      terms[k] = b.and(p, gt[k]);
+      if (k > 0) p = b.and(p, eq[k]);
+    }
+    var gtAll = terms[0];
+    for (var m = 1; m < 8; m++) gtAll = b.or(gtAll, terms[m]);
+    var lt = b.not(b.or(eqAll, gtAll));
+    b.out('GT', gtAll);
+    b.out('EQ', eqAll);
+    b.out('LT', lt);
+    return b.build();
+  }
+  function comparatorExpected(bits) {
+    var a = 0, bb = 0;
+    for (var i = 0; i < 8; i++) { a |= bits[i] << i; bb |= bits[8 + i] << i; }
+    return [a > bb ? 1 : 0, a === bb ? 1 : 0, a < bb ? 1 : 0];
+  }
+
+  function buildMux() {
+    var b = createBuilder(['D0', 'D1', 'D2', 'D3', 'S0', 'S1']);
+    var D = function (i) { return b.inByIndex(i); };
+    var S0 = b.inByIndex(4), S1 = b.inByIndex(5);
+    var m0 = b.mux(D(0), D(1), S0);
+    var m1 = b.mux(D(2), D(3), S0);
+    b.out('Y', b.mux(m0, m1, S1));
+    return b.build();
+  }
+  function muxExpected(bits) {
+    var sel = (bits[5] << 1) | bits[4];
+    return [bits[sel]];
+  }
+
+  function buildMajority() {
+    var b = createBuilder(['A', 'B', 'C']);
+    var A = b.inByIndex(0), B = b.inByIndex(1), C = b.inByIndex(2);
+    var out = b.or(b.or(b.and(A, B), b.and(B, C)), b.and(A, C));
+    b.out('OUT', out);
+    return b.build();
+  }
+  function majorityExpected(bits) {
+    return [(bits[0] + bits[1] + bits[2]) >= 2 ? 1 : 0];
+  }
+
+  function buildParity() {
+    var names = [];
+    for (var i = 0; i < 8; i++) names.push('D' + i);
+    var b = createBuilder(names);
+    var D = function (i) { return b.inByIndex(i); };
+    var p = b.xor(D(0), D(1));
+    for (var i = 2; i < 8; i++) p = b.xor(p, D(i));
+    b.out('P', p);
+    return b.build();
+  }
+  function parityExpected(bits) {
+    var p = 0;
+    for (var i = 0; i < 8; i++) p ^= bits[i];
+    return [p];
+  }
+
+  function buildConsensus() {
+    var b = createBuilder(['RISK', 'LIQ', 'MKT']);
+    var R = b.inByIndex(0), L = b.inByIndex(1), M = b.inByIndex(2);
+    var out = b.or(b.or(b.and(R, L), b.and(L, M)), b.and(R, M));
+    b.out('CONSENSUS', out);
+    return b.build();
+  }
+  function consensusExpected(bits) {
+    return [(bits[0] + bits[1] + bits[2]) >= 2 ? 1 : 0];
+  }
+
+  var TEMPLATES = [
+    {
+      id: 'adder', name: '8-bit Adder', gates: 68,
+      blurb: 'Adds two 8-bit numbers. 1 half adder + 7 full adders (9 NANDs each). Outputs S0–S7 and COUT.',
+      build: buildAdder, expected: adderExpected
+    },
+    {
+      id: 'comparator', name: '8-bit Comparator', gates: 129,
+      blurb: 'Compares two 8-bit numbers. Outputs GT (A>B), EQ (A=B), LT (A<B).',
+      build: buildComparator, expected: comparatorExpected
+    },
+    {
+      id: 'mux', name: '4-to-1 Multiplexer', gates: 24,
+      blurb: 'Selects one of D0–D3 with S1:S0. Built from three 2-to-1 muxes (8 NANDs each).',
+      build: buildMux, expected: muxExpected
+    },
+    {
+      id: 'majority', name: 'Majority Voter (3-input)', gates: 12,
+      blurb: 'OUT = 1 when at least 2 of A, B, C are 1. AB + BC + AC, NAND-only.',
+      build: buildMajority, expected: majorityExpected
+    },
+    {
+      id: 'parity', name: 'Parity Checker (8-bit)', gates: 28,
+      blurb: 'OUT = XOR of D0–D7 (1 when the number of 1s is odd). A 7-XOR tree.',
+      build: buildParity, expected: parityExpected
+    },
+    {
+      id: 'consensus', name: '2-of-3 Consensus (XBOT pattern)', gates: 12,
+      blurb: 'CONSENSUS = majority of RISK, LIQ, MKT — the XBOT risk-circuit pattern: act only when at least 2 of 3 signals agree.',
+      build: buildConsensus, expected: consensusExpected
+    }
+  ];
+
+  // ------------------------------------------------------------- compilation
+  // Compile a circuit into flat arrays for fast repeated evaluation.
+  // values[] layout: [0..nInputs) inputs, [nInputs..nInputs+nGates) gate outputs,
+  // [nInputs+nGates] constant 0 (unconnected gate inputs read as 0).
+  function compile(circuit) {
+    var nIn = circuit.inputs.length, nG = circuit.gates.length;
+    var gateIdx = {}, inIdx = {};
+    circuit.gates.forEach(function (g, i) { gateIdx[g.id] = i; });
+    circuit.inputs.forEach(function (p, i) { inIdx[p.id] = i; });
+    var CONST0 = nIn + nG;
+    function srcSlot(s) {
+      if (!s) return CONST0;
+      if (s.k === 'i') return (s.id in inIdx) ? inIdx[s.id] : CONST0;
+      if (s.k === 'g') return (s.id in gateIdx) ? nIn + gateIdx[s.id] : CONST0;
+      return CONST0;
+    }
+    // Kahn topological sort (detects combinational loops).
+    var indeg = new Array(nG).fill(0), adj = [];
+    for (var i = 0; i < nG; i++) adj.push([]);
+    for (var k = 0; k < nG; k++) {
+      var deps = [];
+      [circuit.gates[k].a, circuit.gates[k].b].forEach(function (s) {
+        if (s && s.k === 'g' && (s.id in gateIdx)) deps.push(gateIdx[s.id]);
+      });
+      deps.forEach(function (d) { indeg[k]++; adj[d].push(k); });
+    }
+    var q = [];
+    for (var m = 0; m < nG; m++) if (indeg[m] === 0) q.push(m);
+    var order = [];
+    while (q.length) {
+      var u = q.shift();
+      order.push(u);
+      adj[u].forEach(function (v) { if (--indeg[v] === 0) q.push(v); });
+    }
+    if (order.length !== nG) return { error: 'combinational loop: ' + (nG - order.length) + ' gate(s) form a cycle (NAND circuits here must be acyclic)' };
+    var aSrc = [], bSrc = [];
+    for (var j = 0; j < nG; j++) {
+      aSrc.push(srcSlot(circuit.gates[j].a));
+      bSrc.push(srcSlot(circuit.gates[j].b));
+    }
+    var outSrc = circuit.outputs.map(function (o) { return srcSlot(o.src); });
+    var unconnected = 0;
+    circuit.gates.forEach(function (g) {
+      if (!g.a || !g.b) unconnected++;
+    });
+    var unwiredOutputs = circuit.outputs.filter(function (o) { return !o.src; }).length;
+    return {
+      nInputs: nIn, nGates: nG, order: order, aSrc: aSrc, bSrc: bSrc,
+      outSrc: outSrc, unconnected: unconnected, unwiredOutputs: unwiredOutputs,
+      const0: CONST0
+    };
+  }
+
+  function evalCompiled(comp, inputBits, values) {
+    for (var i = 0; i < comp.nInputs; i++) values[i] = inputBits[i] ? 1 : 0;
+    values[comp.const0] = 0;
+    for (var k = 0; k < comp.order.length; k++) {
+      var gi = comp.order[k];
+      values[comp.nInputs + gi] = (values[comp.aSrc[gi]] & values[comp.bSrc[gi]]) ? 0 : 1;
+    }
+    var out = new Array(comp.outSrc.length);
+    for (var j = 0; j < out.length; j++) out[j] = values[comp.outSrc[j]];
+    return out;
+  }
+
+  function simulate(circuit, inputBits) {
+    var comp = compile(circuit);
+    if (comp.error) return { error: comp.error };
+    var values = new Array(comp.nInputs + comp.nGates + 1).fill(0);
+    var outputs = evalCompiled(comp, inputBits, values);
+    var gateValues = {};
+    circuit.gates.forEach(function (g, i) { gateValues[g.id] = values[comp.nInputs + i]; });
+    return { outputs: outputs, gateValues: gateValues, warnings: comp };
+  }
+
+  // ------------------------------------------------------------ verification
+  function mulberry32(seed) {
+    var a = seed >>> 0;
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // Exhaustively simulate every input combination (n <= 16) or a deterministic
+  // sample (n > 16: all-zero, all-one, single-bit, + 4096 seeded random cases).
+  // expectedFn: bits[] -> expected output bits[]; null = structural check only.
+  function verifyCircuit(circuit, expectedFn) {
+    var comp = compile(circuit);
+    if (comp.error) return { error: comp.error, total: 0, passed: 0, failed: 0, failures: [], sampled: false };
+    var n = circuit.inputs.length;
+    var values = new Array(comp.nInputs + comp.nGates + 1).fill(0);
+    var cases = [];
+    var sampled = false;
+    if (n <= 16) {
+      var total = 1 << n;
+      for (var c = 0; c < total; c++) cases.push(c);
+    } else {
+      sampled = true;
+      var seen = {};
+      var add = function (bits) {
+        var key = bits.join('');
+        if (!seen[key]) { seen[key] = 1; cases.push(bits.slice()); }
+      };
+      add(new Array(n).fill(0));
+      add(new Array(n).fill(1));
+      for (var i = 0; i < n; i++) { var s = new Array(n).fill(0); s[i] = 1; add(s); }
+      var rnd = mulberry32(0xC0FFEE);
+      for (var r = 0; r < 4096; r++) {
+        var b2 = [];
+        for (var j = 0; j < n; j++) b2.push(rnd() < 0.5 ? 0 : 1);
+        add(b2);
+      }
+    }
+    var passed = 0, failures = [];
+    for (var ci = 0; ci < cases.length; ci++) {
+      var bits;
+      if (sampled) bits = cases[ci];
+      else {
+        bits = new Array(n);
+        for (var b = 0; b < n; b++) bits[b] = (cases[ci] >> b) & 1;
+      }
+      var got = evalCompiled(comp, bits, values);
+      if (!expectedFn) { passed++; continue; }
+      var exp = expectedFn(bits);
+      var ok = got.length === exp.length;
+      if (ok) for (var o = 0; o < got.length; o++) if (got[o] !== exp[o]) { ok = false; break; }
+      if (ok) passed++;
+      else if (failures.length < 20) failures.push({ bits: bits.slice(), got: got.slice(), expected: exp.slice() });
+    }
+    return {
+      total: cases.length, passed: passed, failed: cases.length - passed,
+      failures: failures, sampled: sampled,
+      unconnected: comp.unconnected, unwiredOutputs: comp.unwiredOutputs,
+      gateCount: comp.nGates, inputCount: n, outputCount: circuit.outputs.length
+    };
+  }
+
+  // ---------------------------------------------------------------- netlist
+  function srcName(circuit, s) {
+    if (!s) return '0';
+    if (s.k === 'i') {
+      var p = circuit.inputs.find(function (x) { return x.id === s.id; });
+      return p ? p.name : '?';
+    }
+    var idx = circuit.gates.findIndex(function (g) { return g.id === s.id; });
+    return idx >= 0 ? 'G' + idx : '?';
+  }
+
+  function exportNetlist(circuit, name) {
+    var lines = [];
+    lines.push('# TapeForge netlist — ' + (name || 'untitled circuit'));
+    lines.push('# NAND-only. 1 gate = 1 transistor. TapeOut on X Layer (chain 196).');
+    lines.push('# Inputs (' + circuit.inputs.length + '): ' + circuit.inputs.map(function (p) { return p.name; }).join(' '));
+    lines.push('# Outputs (' + circuit.outputs.length + '): ' + circuit.outputs.map(function (o) { return o.name; }).join(' '));
+    lines.push('# Gates: ' + circuit.gates.length);
+    lines.push('INPUTS ' + circuit.inputs.map(function (p) { return p.name; }).join(' '));
+    lines.push('OUTPUTS ' + circuit.outputs.map(function (o) { return o.name; }).join(' '));
+    circuit.gates.forEach(function (g, i) {
+      lines.push('G' + i + ' = NAND(' + srcName(circuit, g.a) + ', ' + srcName(circuit, g.b) + ')');
+    });
+    circuit.outputs.forEach(function (o) {
+      lines.push(o.name + ' = ' + srcName(circuit, o.src));
+    });
+    lines.push('#');
+    lines.push('# To tape this out (needs a wallet + OKB):');
+    lines.push('# 1. Pick a processor on X Layer (see the Cost panel) and mint ' + circuit.gates.length + ' of its transistors (1 per NAND gate).');
+    lines.push('# 2. Burn the transistors to etch this netlist as a circuit (ERC-721) — the tape-out fee is ~0.0013 OKB.');
+    lines.push('# 3. Anyone can then call the circuit read-only, free, and check its outputs.');
+    return lines.join('\n') + '\n';
+  }
+
+  // -------------------------------------------------------------------- cost
+  var TAPEOUT_FEE_OKB = 0.0013;      // flat tape-out fee, per the TapeOut docs
+  var PROCESSOR_OPEN_FEE_OKB = 0.0066; // flat fee to open your own processor
+  function costEstimate(gateCount, priceOkb) {
+    var transistorCost = gateCount * priceOkb;
+    return {
+      transistors: gateCount,
+      transistorCost: transistorCost,
+      tapeoutFee: TAPEOUT_FEE_OKB,
+      total: transistorCost + TAPEOUT_FEE_OKB,
+      processorOpenFee: PROCESSOR_OPEN_FEE_OKB
+    };
+  }
+  function formatOkb(v) {
+    if (v === 0) return '0';
+    if (v >= 0.01) return v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+    if (v >= 0.000001) return v.toFixed(9).replace(/0+$/, '').replace(/\.$/, '');
+    return v.toExponential(2);
+  }
+
+  return {
+    createBuilder: createBuilder,
+    TEMPLATES: TEMPLATES,
+    compile: compile,
+    simulate: simulate,
+    verifyCircuit: verifyCircuit,
+    exportNetlist: exportNetlist,
+    costEstimate: costEstimate,
+    formatOkb: formatOkb,
+    TAPEOUT_FEE_OKB: TAPEOUT_FEE_OKB,
+    PROCESSOR_OPEN_FEE_OKB: PROCESSOR_OPEN_FEE_OKB
+  };
+});
+
+</script>
+<script>
+// TapeForge — UI layer. Plain DOM + SVG, no framework, no network except the
+// optional X Layer RPC read (refreshLive). All circuit logic lives in circuit.js.
+(function () {
+  'use strict';
+  var TF = window.TapeForgeCircuit;
+
+  // ------------------------------------------------------------ data
+  var FACTORY = '0x1f09daefa827f02cbb40967cc91b259763760761';
+  var RPCS = ['https://rpc.xlayer.tech', 'https://tapeout.net/rpc-xlayer'];
+  // Selectors from the public TapeOut read script (openwitness.net/p/9897):
+  var SEL = { transistors: '0x6fbd1719', nextId: '0x61b8ce8c', price: '0x6817c76c', minted: '0x4f02c420', cap: '0x8f770ad0' };
+  var OKB_USD = 79; // approx OKB price, 25 Nov 2026 — estimate only
+
+  // Cached snapshot — real X Layer processors, read from chain 2026-11-25T12:53:31Z
+  // (factory cpuCount/cpuAt/transistors/nextId/price/minted/cap via public RPC).
+  // Names FAB-Genisis / TAPELIQUID / 9898 are from the 23 Oct 2026 openwitness
+  // survey; their addresses match that survey's price + circuit-count signature.
+  // Totals at snapshot time: 450 processors, 12,242 circuits, median price 0.00066 OKB.
+  var SNAPSHOT_AT = '25 Nov 2026, 12:53 UTC';
+  var processors = [
+    { name: '9898', address: '0x60918c204f3c94630d3d793738fc36293c8405d6', transistor: '0x0f7e9ed401fe35010ebc4d021a204ba031a23194', priceWei: '1000000000000', minted: 16511, cap: 1000000000000, circuits: 1022, note: 'cheapest proven fab' },
+    { name: 'FAB-Genisis', address: '0x87bfca3494aa228ff589ab9b642143a5e8c8f9a6', transistor: '0xbe6f94115d32f3ac3252bc4626573e739beeb714', priceWei: '500000000000000', minted: 1000000, cap: 1000000, circuits: 7164, note: 'most circuits' },
+    { name: 'TAPELIQUID', address: '0x69f663931209096037474d7c20402232e5c762ca', transistor: '0x3fa393d3081accff9e7989619b688235f6d3ee3f', priceWei: '660000000000000', minted: 2100000, cap: 2100000, circuits: 1408, note: 'median price' },
+    { name: 'XBOT', address: '0xa5fc69Ca2D3d462CCa204D894D85ac8071c4F0f0', transistor: '0x7bE7280e31984d18f62218519985EC5DcCa751De', priceWei: '9000000000000000', minted: 40, cap: 1000000000, circuits: 5, note: 'consensus-circuit processor' },
+    { name: 'ViperX', address: '0xb57b56034e2dc25161e2512CfC40b24EA3bee1Fb', transistor: '0xfce5366485140045e95ebdba88ad775fc4aad79f', priceWei: '0', minted: 158, cap: 158, circuits: 4, note: 'free, sold out' },
+    { name: 'Cheapest available', address: '0x99081e1d0ce916cd5b2c53e769dfc3b000bfe9a4', transistor: '0x80a7eb72bc4e559c47304efe6a0f6e73717df5cb', priceWei: '1', minted: 281, cap: 1e24, circuits: 19, note: '1 wei / transistor' }
+  ];
+  processors.forEach(function (p) { p.priceOkb = Number(BigInt(p.priceWei)) / 1e18; });
+  var dataLive = false, liveBlock = null, liveAt = null;
+  var selectedProc = 0; // index into processors
+
+  // ------------------------------------------------------------ state
+  var state = {
+    circuit: null, layout: { gates: {}, inputs: {}, outputs: {} },
+    inputValues: {}, counters: { gate: 0, input: 0, output: 0 },
+    templateId: null, circuitName: 'Custom circuit'
+  };
+  var history = [], redoStack = [];
+  var pendingWire = null; // {k:'i'|'g', id} source ref waiting for a target
+  var selected = null;    // {kind:'gate'|'input'|'output', id}
+  var drag = null;        // {id, dx, dy, moved}
+  var mousePos = null;    // svg coords while a wire is pending
+  var lastVerify = null;
+  var zoomMode = 'fit'; // 'fit' = fit the whole circuit in view, or a number = manual zoom level
+  function computeFitZoom(size) {
+    var cs = $('canvas-scroll');
+    var w = cs && cs.clientWidth ? cs.clientWidth : 0;
+    if (!w || !size || !size.w) return 1;
+    var z = (w - 4) / size.w;
+    if (!isFinite(z) || z <= 0) return 1;
+    return Math.min(1, z);
+  }
+  function currentZoom(size) {
+    var z = zoomMode === 'fit' ? computeFitZoom(size || canvasSize()) : zoomMode;
+    if (!isFinite(z) || z <= 0) z = 1;
+    return z;
+  }
+  function setZoom(mode) {
+    if (mode === 'fit') zoomMode = 'fit';
+    else if (mode === '100') zoomMode = 1;
+    else if (mode === 'in') zoomMode = Math.min(2, currentZoom() * 1.25);
+    else if (mode === 'out') zoomMode = Math.max(0.15, currentZoom() / 1.25);
+    renderCanvas();
+  }
+
+  var svg = document.getElementById('canvas');
+  var $ = function (id) { return document.getElementById(id); };
+
+  function snapshot() {
+    return JSON.parse(JSON.stringify({
+      circuit: state.circuit, layout: state.layout, inputValues: state.inputValues,
+      counters: state.counters, templateId: state.templateId, circuitName: state.circuitName
+    }));
+  }
+  function restore(s) {
+    state.circuit = s.circuit; state.layout = s.layout; state.inputValues = s.inputValues;
+    state.counters = s.counters; state.templateId = s.templateId; state.circuitName = s.circuitName;
+    pendingWire = null; selected = null;
+  }
+  function commit() { history.push(snapshot()); if (history.length > 60) history.shift(); redoStack = []; }
+  function undo() {
+    if (!history.length) return;
+    redoStack.push(snapshot()); restore(history.pop()); renderAll();
+  }
+  function redo() {
+    if (!redoStack.length) return;
+    history.push(snapshot()); restore(redoStack.pop()); renderAll();
+  }
+
+  // ------------------------------------------------------------ layout
+  var GATE_W = 72, GATE_H = 48, PIN_W = 64, PIN_H = 30;
+  function gateDepth(circuit) {
+    var depth = {}, idx = {};
+    circuit.gates.forEach(function (g, i) { idx[g.id] = i; });
+    function d(id, seen) {
+      if (depth[id] !== undefined) return depth[id];
+      if (seen[id]) return 0;
+      seen[id] = 1;
+      var g = circuit.gates[idx[id]], m = -1;
+      [g.a, g.b].forEach(function (s) {
+        if (s && s.k === 'g') m = Math.max(m, d(s.id, seen));
+      });
+      depth[id] = m + 1;
+      return depth[id];
+    }
+    circuit.gates.forEach(function (g) { d(g.id, {}); });
+    return depth;
+  }
+  function autoLayout(circuit) {
+    var layout = { gates: {}, inputs: {}, outputs: {} };
+    var depth = gateDepth(circuit), maxDepth = 0;
+    circuit.gates.forEach(function (g) { maxDepth = Math.max(maxDepth, depth[g.id] || 0); });
+    var cols = {};
+    circuit.gates.forEach(function (g) {
+      var c = depth[g.id] || 0;
+      (cols[c] = cols[c] || []).push(g.id);
+    });
+    Object.keys(cols).forEach(function (c) {
+      cols[c].forEach(function (id, i) {
+        layout.gates[id] = { x: 150 + (+c) * 120, y: 30 + i * 66 };
+      });
+    });
+    circuit.inputs.forEach(function (p, i) { layout.inputs[p.id] = { x: 20, y: 30 + i * 44 }; });
+    var outX = 150 + (maxDepth + 1) * 120 + 40;
+    circuit.outputs.forEach(function (o, i) { layout.outputs[o.id] = { x: outX, y: 30 + i * 44 }; });
+    return layout;
+  }
+  function canvasSize() {
+    var w = 300, h = 200;
+    function ext(x, y, ww, hh) { w = Math.max(w, x + ww + 40); h = Math.max(h, y + hh + 40); }
+    Object.values(state.layout.gates).forEach(function (p) { ext(p.x, p.y, GATE_W, GATE_H); });
+    Object.values(state.layout.inputs).forEach(function (p) { ext(p.x, p.y, PIN_W, PIN_H); });
+    Object.values(state.layout.outputs).forEach(function (p) { ext(p.x, p.y, PIN_W, PIN_H); });
+    return { w: w, h: h };
+  }
+  function portPos(kind, id, which) {
+    var L = state.layout;
+    if (kind === 'gate') {
+      var g = L.gates[id]; if (!g) return null;
+      if (which === 'out') return { x: g.x + GATE_W, y: g.y + GATE_H / 2 };
+      if (which === 'a') return { x: g.x, y: g.y + 14 };
+      return { x: g.x, y: g.y + 34 };
+    }
+    if (kind === 'input') {
+      var p = L.inputs[id]; if (!p) return null;
+      return { x: p.x + PIN_W, y: p.y + PIN_H / 2 };
+    }
+    var o = L.outputs[id]; if (!o) return null;
+    return { x: o.x, y: o.y + PIN_H / 2 };
+  }
+  function srcPortPos(s) {
+    if (!s) return null;
+    return s.k === 'i' ? portPos('input', s.id, 'out') : portPos('gate', s.id, 'out');
+  }
+
+  // ------------------------------------------------------------ render
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function renderAll() {
+    renderTemplates();
+    renderCanvas();
+    updateLive();
+    renderCost();
+    renderNetlist();
+    $('circuit-name').textContent = state.circuitName;
+    $('btn-undo').disabled = !history.length;
+    $('btn-redo').disabled = !redoStack.length;
+    $('btn-delete').disabled = !selected;
+  }
+
+  function renderTemplates() {
+    var el = $('template-list');
+    el.innerHTML = TF.TEMPLATES.map(function (t) {
+      return '<button class="tpl' + (state.templateId === t.id ? ' active' : '') + '" data-tpl="' + t.id + '">' +
+        '<b>' + esc(t.name) + '</b><span class="gates">' + t.gates + ' NAND gates</span>' +
+        '<p>' + esc(t.blurb) + '</p></button>';
+    }).join('');
+  }
+
+  function renderCanvas() {
+    var c = state.circuit;
+    var sim = TF.simulate(c, c.inputs.map(function (p) { return state.inputValues[p.id] || 0; }));
+    var gateVals = (sim && !sim.error) ? sim.gateValues : {};
+    var outVals = (sim && !sim.error) ? sim.outputs : [];
+    var outValById = {};
+    c.outputs.forEach(function (o, i) { outValById[o.id] = outVals[i]; });
+
+    var s = '';
+    // wires (under the nodes)
+    function wirePath(p1, p2) {
+      var dx = Math.max(30, Math.abs(p2.x - p1.x) / 2);
+      return 'M ' + p1.x + ' ' + p1.y + ' C ' + (p1.x + dx) + ' ' + p1.y + ', ' + (p2.x - dx) + ' ' + p2.y + ', ' + p2.x + ' ' + p2.y;
+    }
+    c.gates.forEach(function (g) {
+      [['a', g.a], ['b', g.b]].forEach(function (pair) {
+        var which = pair[0], src = pair[1];
+        var p1 = srcPortPos(src), p2 = portPos('gate', g.id, which);
+        if (!p1 || !p2) return;
+        var key = 'gate:' + g.id + ':' + which;
+        s += '<path class="wire" d="' + wirePath(p1, p2) + '"/>' +
+             '<path class="wire-hit" data-wire="' + key + '" d="' + wirePath(p1, p2) + '"><title>Click to remove this wire</title></path>';
+      });
+    });
+    c.outputs.forEach(function (o) {
+      var p1 = srcPortPos(o.src), p2 = portPos('output', o.id, 'in');
+      if (!p1 || !p2) return;
+      var key = 'output:' + o.id;
+      s += '<path class="wire" d="' + wirePath(p1, p2) + '"/>' +
+           '<path class="wire-hit" data-wire="' + key + '" d="' + wirePath(p1, p2) + '"><title>Click to remove this wire</title></path>';
+    });
+    // pending wire follows the mouse
+    if (pendingWire && mousePos) {
+      var sp = srcPortPos(pendingWire);
+      if (sp) s += '<path class="wire-pending" d="' + wirePath(sp, mousePos) + '"/>';
+    }
+    // input pins
+    c.inputs.forEach(function (p) {
+      var pos = state.layout.inputs[p.id]; if (!pos) return;
+      var v = state.inputValues[p.id] || 0;
+      s += '<g class="pin' + (selected && selected.kind === 'input' && selected.id === p.id ? ' selected' : '') + '" data-node="input" data-id="' + p.id + '">' +
+        '<rect class="body" x="' + pos.x + '" y="' + pos.y + '" width="' + PIN_W + '" height="' + PIN_H + '" rx="5"/>' +
+        '<text x="' + (pos.x + 8) + '" y="' + (pos.y + 13) + '">' + esc(p.name) + '</text>' +
+        '<text class="val" x="' + (pos.x + 8) + '" y="' + (pos.y + 25) + '" fill="' + (v ? '#34d399' : '#8a97a8') + '">' + v + '</text>' +
+        '</g>' +
+        '<circle class="port' + (pendingWire && pendingWire.k === 'i' && pendingWire.id === p.id ? ' source' : '') + '" data-port="out" data-kind="input" data-id="' + p.id + '" cx="' + (pos.x + PIN_W) + '" cy="' + (pos.y + PIN_H / 2) + '" r="7"><title>Output port — click, then click a gate input or output pin</title></circle>';
+    });
+    // gates
+    c.gates.forEach(function (g, i) {
+      var pos = state.layout.gates[g.id]; if (!pos) return;
+      var v = gateVals[g.id];
+      var sel = selected && selected.kind === 'gate' && selected.id === g.id;
+      s += '<g class="gate' + (sel ? ' selected' : '') + '" data-node="gate" data-id="' + g.id + '">' +
+        '<rect class="body" x="' + pos.x + '" y="' + pos.y + '" width="' + GATE_W + '" height="' + GATE_H + '" rx="6"/>' +
+        '<text x="' + (pos.x + 10) + '" y="' + (pos.y + 20) + '">NAND</text>' +
+        '<text class="idx" x="' + (pos.x + 10) + '" y="' + (pos.y + 36) + '">G' + i + (v === undefined ? '' : ' = ' + v) + '</text>' +
+        '</g>';
+      [['a', 14], ['b', 34]].forEach(function (pair) {
+        var which = pair[0], py = pos.y + pair[1];
+        var isTarget = !!pendingWire;
+        s += '<circle class="port' + (isTarget ? ' target-ok' : '') + '" data-port="' + which + '" data-kind="gate" data-id="' + g.id + '" cx="' + pos.x + '" cy="' + py + '" r="7"><title>Input ' + which.toUpperCase() + ' — click to connect the pending wire here</title></circle>';
+      });
+      s += '<circle class="port' + (pendingWire && pendingWire.k === 'g' && pendingWire.id === g.id ? ' source' : '') + '" data-port="out" data-kind="gate" data-id="' + g.id + '" cx="' + (pos.x + GATE_W) + '" cy="' + (pos.y + GATE_H / 2) + '" r="7"><title>Output — click, then click a gate input or output pin</title></circle>';
+    });
+    // output pins
+    c.outputs.forEach(function (o) {
+      var pos = state.layout.outputs[o.id]; if (!pos) return;
+      var v = outValById[o.id];
+      s += '<g class="pin out" data-node="output" data-id="' + o.id + '">' +
+        '<rect class="body" x="' + pos.x + '" y="' + pos.y + '" width="' + PIN_W + '" height="' + PIN_H + '" rx="5"/>' +
+        '<text x="' + (pos.x + 8) + '" y="' + (pos.y + 13) + '">' + esc(o.name) + '</text>' +
+        '<text class="val" x="' + (pos.x + 8) + '" y="' + (pos.y + 25) + '" fill="' + (v ? '#34d399' : '#8a97a8') + '">' + (v === undefined ? '–' : v) + '</text>' +
+        '</g>' +
+        '<circle class="port' + (pendingWire ? ' target-ok' : '') + '" data-port="in" data-kind="output" data-id="' + o.id + '" cx="' + pos.x + '" cy="' + (pos.y + PIN_H / 2) + '" r="7"><title>Input — click to connect the pending wire here</title></circle>';
+    });
+    var size = canvasSize();
+    var z = currentZoom(size);
+    // viewBox keeps all coordinates in circuit units, so dragging, wiring
+    // and hit-testing (via getScreenCTM) work unchanged at any zoom; the
+    // width/height attributes scale the rendered size, and #canvas-scroll
+    // scrolls over it. Default is Fit, so the widest templates (comparator
+    // ~4,494 px, adder ~2,454 px) are visible whole instead of starting
+    // scrolled to a corner of a much wider canvas.
+    svg.setAttribute('viewBox', '0 0 ' + size.w + ' ' + size.h);
+    svg.setAttribute('width', Math.max(1, Math.round(size.w * z)));
+    svg.setAttribute('height', Math.max(1, Math.round(size.h * z)));
+    svg.innerHTML = s;
+    var cs2 = $('canvas-size');
+    if (cs2) cs2.textContent = size.w + ' × ' + size.h + ' px · ' + Math.round(z * 100) + '%';
+    var zl = $('zoom-label');
+    if (zl) zl.textContent = Math.round(z * 100) + '%';
+  }
+
+  function updateLive() {
+    var c = state.circuit;
+    var sim = TF.simulate(c, c.inputs.map(function (p) { return state.inputValues[p.id] || 0; }));
+    var el = $('live-status');
+    var parts = ['<span class="ok">' + c.gates.length + ' gates · ' + c.inputs.length + ' inputs · ' + c.outputs.length + ' outputs</span>'];
+    if (sim.error) parts.push('<span class="err">⚠ ' + esc(sim.error) + '</span>');
+    else {
+      if (sim.warnings.unconnected) parts.push('<span class="warn">⚠ ' + sim.warnings.unconnected + ' gate input(s) unconnected (read as 0)</span>');
+      if (sim.warnings.unwiredOutputs) parts.push('<span class="warn">⚠ ' + sim.warnings.unwiredOutputs + ' output(s) unwired</span>');
+      if (!sim.warnings.unconnected && !sim.warnings.unwiredOutputs) parts.push('<span class="ok">live simulation OK</span>');
+    }
+    el.innerHTML = parts.join(' &nbsp;·&nbsp; ');
+  }
+
+  // ------------------------------------------------------------ verify UI
+  function runVerify() {
+    var tpl = state.templateId ? TF.TEMPLATES.find(function (t) { return t.id === state.templateId; }) : null;
+    var expectedFn = tpl ? tpl.expected : null;
+    var t0 = Date.now();
+    var r = TF.verifyCircuit(state.circuit, expectedFn);
+    lastVerify = r;
+    var box = $('verify-summary'), wrap = $('verify-table-wrap');
+    if (r.error) {
+      box.innerHTML = '<span class="fail">Cannot verify: ' + esc(r.error) + '</span>';
+      wrap.innerHTML = '';
+      return;
+    }
+    var head = r.failed === 0
+      ? '<span class="pass">✓ ' + r.passed.toLocaleString() + '/' + r.total.toLocaleString() + ' cases pass</span>'
+      : '<span class="fail">✗ ' + r.passed.toLocaleString() + '/' + r.total.toLocaleString() + ' pass — ' + r.failed.toLocaleString() + ' fail</span>';
+    head += ' <span style="color:var(--muted)">(' + (r.sampled ? 'sampled, deterministic' : 'exhaustive') + ', ' + (Date.now() - t0) + ' ms)</span>';
+    if (!expectedFn) head += '<br><span style="color:var(--muted)">No expected function for a custom circuit — showing simulated outputs only (structural checks: no loops, ' + r.unconnected + ' unconnected inputs, ' + r.unwiredOutputs + ' unwired outputs).</span>';
+    box.innerHTML = head;
+
+    // Truth table: failures first, then the first passing cases (max 40 rows).
+    var c = state.circuit;
+    var rows = [];
+    function rowFor(bits) {
+      var got = TF.simulate(c, bits).outputs;
+      var exp = expectedFn ? expectedFn(bits) : null;
+      var ok = !exp || got.every(function (v, i) { return v === exp[i]; });
+      return { bits: bits, got: got, exp: exp, ok: ok };
+    }
+    r.failures.forEach(function (f) { rows.push({ bits: f.bits, got: f.got, exp: f.expected, ok: false }); });
+    if (!r.sampled) {
+      var need = Math.max(0, 40 - rows.length);
+      for (var cs = 0; cs < Math.min(need, r.total); cs++) {
+        var bits = c.inputs.map(function (_, i) { return (cs >> i) & 1; });
+        var row = rowFor(bits);
+        if (row.ok) rows.push(row);
+      }
+    }
+    if (!rows.length) { wrap.innerHTML = '<p class="panel-note">No rows to show.</p>'; return; }
+    var h = '<table><thead><tr>' +
+      c.inputs.map(function (p) { return '<th class="mono">' + esc(p.name) + '</th>'; }).join('') +
+      c.outputs.map(function (o) { return '<th class="mono">' + esc(o.name) + '</th>'; }).join('') +
+      (expectedFn ? c.outputs.map(function (o) { return '<th class="mono">exp ' + esc(o.name) + '</th>'; }).join('') : '') +
+      (expectedFn ? '<th>Result</th>' : '') + '</tr></thead><tbody>';
+    rows.forEach(function (row) {
+      h += '<tr>' + row.bits.map(function (b) { return '<td class="mono">' + b + '</td>'; }).join('') +
+        row.got.map(function (g) { return '<td class="mono">' + g + '</td>'; }).join('') +
+        (row.exp ? row.exp.map(function (e) { return '<td class="mono">' + e + '</td>'; }).join('') : '') +
+        (expectedFn ? '<td class="' + (row.ok ? 'pass' : 'fail') + '">' + (row.ok ? '✓' : '✗ FAIL') + '</td>' : '') + '</tr>';
+    });
+    h += '</tbody></table>';
+    if (r.total > rows.length) h += '<p class="panel-note">Showing ' + rows.length + ' of ' + r.total.toLocaleString() + ' cases' + (r.failed ? ' (all ' + r.failed + ' failures shown first)' : ' (first cases)') + '.</p>';
+    wrap.innerHTML = h;
+  }
+
+  // ------------------------------------------------------------ cost UI
+  function cheapestAvailable() {
+    var best = null;
+    processors.forEach(function (p, i) {
+      if (p.minted < p.cap && (!best || p.priceOkb < processors[best].priceOkb)) best = i;
+    });
+    return best;
+  }
+  function renderCost() {
+    var cheapest = cheapestAvailable();
+    $('processor-body').innerHTML = processors.map(function (p, i) {
+      var soldOut = p.minted >= p.cap;
+      var tags = '';
+      if (i === cheapest) tags += '<span class="tag cheapest">cheapest</span>';
+      if (p.circuits >= 1000 && !soldOut) tags += '<span class="tag">proven fab</span>';
+      if (soldOut) tags += '<span class="tag soldout">sold out</span>';
+      return '<tr data-proc="' + i + '" class="' + (i === selectedProc ? 'selected' : '') + '">' +
+        '<td><b>' + esc(p.name) + '</b>' + tags + '<br><span style="color:var(--muted)">' + esc(p.note) + '</span><br>' +
+        '<span class="mono" style="color:var(--muted);font-size:10px">' + p.address.slice(0, 10) + '…' + p.address.slice(-6) + '</span></td>' +
+        '<td class="mono">' + TF.formatOkb(p.priceOkb) + ' OKB</td>' +
+        '<td class="mono">' + p.circuits.toLocaleString() + '</td>' +
+        '<td class="mono">' + p.minted.toLocaleString() + ' / ' + (p.cap >= 1e15 ? p.cap.toExponential(0) : p.cap.toLocaleString()) + '</td></tr>';
+    }).join('');
+    var p = processors[selectedProc];
+    var gates = state.circuit.gates.length;
+    var est = TF.costEstimate(gates, p.priceOkb);
+    var openFee = $('chk-open-fee').checked ? TF.PROCESSOR_OPEN_FEE_OKB : 0;
+    var total = est.total + openFee;
+    var usd = total * OKB_USD;
+    $('cost-breakdown').innerHTML =
+      '<div class="row"><span>Processor</span><span class="num">' + esc(p.name) + '</span></div>' +
+      '<div class="row"><span>Transistors (1 per gate)</span><span class="num">' + gates + ' × ' + TF.formatOkb(p.priceOkb) + ' OKB</span></div>' +
+      '<div class="row"><span>Transistor cost</span><span class="num">' + TF.formatOkb(est.transistorCost) + ' OKB</span></div>' +
+      '<div class="row"><span>Tape-out fee</span><span class="num">' + TF.formatOkb(est.tapeoutFee) + ' OKB</span></div>' +
+      (openFee ? '<div class="row"><span>Processor-opening fee</span><span class="num">' + TF.formatOkb(openFee) + ' OKB</span></div>' : '') +
+      '<div class="row total"><span>Estimated total</span><span>' + TF.formatOkb(total) + ' OKB ≈ $' + usd.toFixed(2) + '</span></div>';
+    var src = $('data-source');
+    var label = dataLive
+      ? '<b class="live">LIVE</b> from X Layer RPC · block ' + liveBlock + ' · ' + liveAt
+      : '<b>cached snapshot</b> · <span id="snapshot-date">' + SNAPSHOT_AT + '</span>';
+    src.innerHTML = 'Data: ' + label + ' · <button id="btn-refresh" class="small">↻ Refresh live</button> <span id="refresh-status"></span>';
+    $('btn-refresh').addEventListener('click', refreshLive);
+  }
+  function renderNetlist() {
+    $('netlist-view').textContent = TF.exportNetlist(state.circuit, state.circuitName);
+  }
+
+  // ------------------------------------------------------------ live RPC
+  function rpcCall(url, payload) {
+    return fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload), signal: AbortSignal.timeout(20000)
+    }).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+  }
+  function word(h, i) {
+    i = i || 0;
+    if (!h || typeof h !== 'string') return 0;
+    return parseInt(h.slice(2 + i * 64, 2 + i * 64 + 64) || '0', 16);
+  }
+  function addr(h) { return h ? '0x' + h.slice(26, 66) : '0x' + '0'.repeat(40); }
+  function batch(url, pairs) {
+    // pairs: [[to, data], ...] — max 10 per batch (public RPC limit)
+    var out = [];
+    var chain = Promise.resolve();
+    for (var i = 0; i < pairs.length; i += 10) {
+      (function (part) {
+        chain = chain.then(function () {
+          return rpcCall(url, part.map(function (p, k) {
+            return { jsonrpc: '2.0', id: k, method: 'eth_call', params: [{ to: p[0], data: p[1] }, 'latest'] };
+          })).then(function (res) {
+            var byId = {};
+            (Array.isArray(res) ? res : [res]).forEach(function (o) { byId[o.id] = o.result; });
+            part.forEach(function (_, k) { out.push(byId[k]); });
+          });
+        }).then(function () { return new Promise(function (r) { setTimeout(r, 250); }); });
+      })(pairs.slice(i, i + 10));
+    }
+    return chain.then(function () { return out; });
+  }
+  function refreshLive() {
+    var status = $('refresh-status');
+    if (status) status.textContent = 'reading…';
+    var chain = Promise.resolve(null);
+    RPCS.forEach(function (url) {
+      chain = chain.then(function (found) {
+        if (found) return found;
+        return rpcCall(url, { jsonrpc: '2.0', id: 0, method: 'eth_chainId', params: [] })
+          .then(function (r) { return r.result === '0xc4' ? url : null; })
+          .catch(function () { return null; });
+      });
+    });
+    chain.then(function (url) {
+      if (!url) throw new Error('no X Layer RPC reachable (tried ' + RPCS.join(', ') + ')');
+      var pairs = [];
+      processors.forEach(function (p) {
+        pairs.push([p.address, SEL.transistors]);
+        pairs.push([p.transistor, SEL.price]);
+        pairs.push([p.address, SEL.nextId]);
+        pairs.push([p.transistor, SEL.minted]);
+        pairs.push([p.transistor, SEL.cap]);
+      });
+      return batch(url, pairs).then(function (res) {
+        return rpcCall(url, { jsonrpc: '2.0', id: 0, method: 'eth_blockNumber', params: [] })
+          .then(function (b) { return { url: url, res: res, block: parseInt(b.result, 16) }; });
+      });
+    }).then(function (done) {
+      processors.forEach(function (p, i) {
+        var r = done.res.slice(i * 5, i * 5 + 5);
+        var token = addr(r[0]);
+        var priceWei = String(word(r[1]));
+        var circuits = word(r[2]);
+        var minted = word(r[3]);
+        var cap = word(r[4]);
+        if (token !== '0x0000000000000000000000000000000000000000') p.transistor = token;
+        p.priceWei = priceWei;
+        p.priceOkb = Number(BigInt(priceWei)) / 1e18;
+        p.circuits = circuits; p.minted = minted; p.cap = cap;
+      });
+      dataLive = true; liveBlock = done.block.toLocaleString();
+      liveAt = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+      renderCost();
+    }).catch(function (e) {
+      var s2 = $('refresh-status');
+      if (s2) s2.textContent = 'live read failed (' + e.message + ') — showing snapshot';
+    });
+  }
+
+  // ------------------------------------------------------------ actions
+  function loadTemplate(tpl) {
+    if (state.circuit) commit(); // no history entry for the very first load
+    state.circuit = tpl.build();
+    state.layout = autoLayout(state.circuit);
+    state.inputValues = {};
+    state.circuit.inputs.forEach(function (p) { state.inputValues[p.id] = 0; });
+    state.counters = { gate: state.circuit.gates.length, input: state.circuit.inputs.length, output: state.circuit.outputs.length };
+    state.templateId = tpl.id;
+    state.circuitName = tpl.name;
+    lastVerify = null;
+    $('verify-summary').innerHTML = 'Press <b>Verify circuit</b> to run it.';
+    $('verify-table-wrap').innerHTML = '';
+    var cs = $('canvas-scroll');
+    if (cs) { cs.scrollLeft = 0; cs.scrollTop = 0; } // new template starts top-left
+    renderAll();
+  }
+  function addGate() {
+    commit();
+    var c = state.circuit;
+    var maxRight = 150;
+    Object.values(state.layout.gates).forEach(function (p) { maxRight = Math.max(maxRight, p.x + GATE_W); });
+    var id = 'g' + (state.counters.gate++);
+    c.gates.push({ id: id, a: null, b: null });
+    state.layout.gates[id] = { x: maxRight + 40, y: 60 };
+    // keep output pins to the right of the new gate
+    var need = maxRight + 40 + GATE_W + 60;
+    Object.values(state.layout.outputs).forEach(function (p) { if (p.x < need) p.x = need; });
+    state.templateId = null; state.circuitName = 'Custom circuit';
+    renderAll();
+  }
+  function addPin(kind) {
+    commit();
+    var c = state.circuit;
+    if (kind === 'input') {
+      var id = 'in' + (state.counters.input++);
+      var name = 'IN' + c.inputs.length;
+      c.inputs.push({ id: id, name: name });
+      state.layout.inputs[id] = { x: 20, y: 30 + (c.inputs.length - 1) * 44 };
+      state.inputValues[id] = 0;
+    } else {
+      var oid = 'out' + (state.counters.output++);
+      var oname = 'OUT' + c.outputs.length;
+      c.outputs.push({ id: oid, name: oname, src: null });
+      var maxRight = 260;
+      Object.values(state.layout.gates).forEach(function (p) { maxRight = Math.max(maxRight, p.x + GATE_W + 60); });
+      state.layout.outputs[oid] = { x: maxRight, y: 30 + (c.outputs.length - 1) * 44 };
+    }
+    state.templateId = null; state.circuitName = 'Custom circuit';
+    renderAll();
+  }
+  function deleteSelected() {
+    if (!selected) return;
+    commit();
+    var c = state.circuit;
+    if (selected.kind === 'gate') {
+      c.gates = c.gates.filter(function (g) { return g.id !== selected.id; });
+      c.gates.forEach(function (g) {
+        if (g.a && g.a.k === 'g' && g.a.id === selected.id) g.a = null;
+        if (g.b && g.b.k === 'g' && g.b.id === selected.id) g.b = null;
+      });
+      c.outputs.forEach(function (o) { if (o.src && o.src.k === 'g' && o.src.id === selected.id) o.src = null; });
+      delete state.layout.gates[selected.id];
+    } else if (selected.kind === 'input') {
+      c.inputs = c.inputs.filter(function (p) { return p.id !== selected.id; });
+      c.gates.forEach(function (g) {
+        if (g.a && g.a.k === 'i' && g.a.id === selected.id) g.a = null;
+        if (g.b && g.b.k === 'i' && g.b.id === selected.id) g.b = null;
+      });
+      c.outputs.forEach(function (o) { if (o.src && o.src.k === 'i' && o.src.id === selected.id) o.src = null; });
+      delete state.layout.inputs[selected.id];
+      delete state.inputValues[selected.id];
+    } else {
+      c.outputs = c.outputs.filter(function (o) { return o.id !== selected.id; });
+      delete state.layout.outputs[selected.id];
+    }
+    selected = null;
+    state.templateId = null; state.circuitName = 'Custom circuit';
+    renderAll();
+  }
+  function deleteWire(key) {
+    commit();
+    var parts = key.split(':');
+    var c = state.circuit;
+    if (parts[0] === 'gate') {
+      var g = c.gates.find(function (x) { return x.id === parts[1]; });
+      if (g) g[parts[2]] = null;
+    } else {
+      var o = c.outputs.find(function (x) { return x.id === parts[1]; });
+      if (o) o.src = null;
+    }
+    state.templateId = null; state.circuitName = 'Custom circuit';
+    renderAll();
+  }
+  function completeWire(target) {
+    // target: {kind:'gate', id, which:'a'|'b'} or {kind:'output', id}
+    commit();
+    var c = state.circuit;
+    if (target.kind === 'gate') {
+      var g = c.gates.find(function (x) { return x.id === target.id; });
+      if (g) g[target.which] = { k: pendingWire.k, id: pendingWire.id };
+    } else {
+      var o = c.outputs.find(function (x) { return x.id === target.id; });
+      if (o) o.src = { k: pendingWire.k, id: pendingWire.id };
+    }
+    pendingWire = null;
+    state.templateId = null; state.circuitName = 'Custom circuit';
+    renderAll();
+  }
+
+  // ------------------------------------------------------------ events
+  function svgPoint(e) {
+    var pt = svg.createSVGPoint();
+    pt.x = e.clientX; pt.y = e.clientY;
+    return pt.matrixTransform(svg.getScreenCTM().inverse());
+  }
+  svg.addEventListener('pointerdown', function (e) {
+    var port = e.target.closest('[data-port]');
+    if (port) {
+      var kind = port.getAttribute('data-kind'), id = port.getAttribute('data-id'), which = port.getAttribute('data-port');
+      if (which === 'out') {
+        // source port: start (or switch) a pending wire
+        pendingWire = { k: kind === 'input' ? 'i' : 'g', id: id };
+        mousePos = svgPoint(e);
+        renderCanvas();
+      } else {
+        // target port: complete the pending wire
+        if (pendingWire) completeWire({ kind: kind, id: id, which: which });
+      }
+      e.stopPropagation();
+      return;
+    }
+    var node = e.target.closest('[data-node]');
+    if (node && node.getAttribute('data-node') === 'gate') {
+      var gid = node.getAttribute('data-id');
+      var pos = state.layout.gates[gid];
+      var p = svgPoint(e);
+      drag = { id: gid, dx: p.x - pos.x, dy: p.y - pos.y, moved: false, committed: false };
+      selected = { kind: 'gate', id: gid };
+      renderCanvas();
+      e.stopPropagation();
+    }
+  });
+  svg.addEventListener('pointermove', function (e) {
+    var p = svgPoint(e);
+    if (pendingWire) { mousePos = p; renderCanvas(); return; }
+    if (drag) {
+      var pos = state.layout.gates[drag.id];
+      var nx = p.x - drag.dx, ny = p.y - drag.dy;
+      if (Math.abs(nx - pos.x) > 4 || Math.abs(ny - pos.y) > 4) {
+        if (!drag.committed) { commit(); drag.committed = true; }
+        drag.moved = true;
+      }
+      if (drag.moved) {
+        pos.x = Math.max(0, Math.round(nx));
+        pos.y = Math.max(0, Math.round(ny));
+        renderCanvas();
+      }
+    }
+  });
+  svg.addEventListener('pointerup', function () { drag = null; });
+  // Single click on a pin toggles it (input) or selects it (output);
+  // a double click renames it. A short timer tells the two apart so a
+  // double click does not also toggle the value.
+  var clickTimer = null, clickTarget = null;
+  function renamePin(kind, id) {
+    var list = kind === 'input' ? state.circuit.inputs : state.circuit.outputs;
+    var pin = list.find(function (x) { return x.id === id; });
+    if (!pin) return;
+    var name = window.prompt('Rename pin "' + pin.name + '" to:', pin.name);
+    if (name && name.trim() && name.trim() !== pin.name) {
+      commit();
+      pin.name = name.trim().replace(/\s+/g, '_').slice(0, 12);
+      state.templateId = null; state.circuitName = 'Custom circuit';
+      renderAll();
+    }
+  }
+  function handlePinClick(kind, id) {
+    var key = kind + ':' + id;
+    if (clickTimer && clickTarget === key) {
+      clearTimeout(clickTimer); clickTimer = null; clickTarget = null;
+      renamePin(kind, id);
+      return;
+    }
+    clickTarget = key;
+    clickTimer = setTimeout(function () {
+      clickTimer = null; clickTarget = null;
+      if (kind === 'input') {
+        commit();
+        state.inputValues[id] = state.inputValues[id] ? 0 : 1;
+        selected = { kind: 'input', id: id };
+        renderAll();
+      } else if (kind === 'output') {
+        selected = { kind: 'output', id: id };
+        renderCanvas();
+      }
+    }, 260);
+  }
+  svg.addEventListener('click', function (e) {
+    var wire = e.target.closest('[data-wire]');
+    if (wire) { deleteWire(wire.getAttribute('data-wire')); return; }
+    var port = e.target.closest('[data-port]');
+    if (port) return; // handled in pointerdown
+    var node = e.target.closest('[data-node]');
+    if (node) {
+      var kind = node.getAttribute('data-node'), id = node.getAttribute('data-id');
+      if (kind === 'gate') {
+        selected = { kind: 'gate', id: id };
+        renderCanvas();
+      } else {
+        handlePinClick(kind, id);
+      }
+      return;
+    }
+    // clicked empty canvas: cancel a pending wire / clear selection
+    if (pendingWire) { pendingWire = null; renderCanvas(); }
+    else if (selected) { selected = null; renderCanvas(); }
+  });
+  svg.addEventListener('contextmenu', function (e) {
+    var node = e.target.closest('[data-node]');
+    if (!node) return;
+    e.preventDefault();
+    selected = { kind: node.getAttribute('data-node'), id: node.getAttribute('data-id') };
+    deleteSelected();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+    else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
+    else if (e.key === 'Delete' || e.key === 'Backspace') { if (selected) { e.preventDefault(); deleteSelected(); } }
+    else if (e.key === 'Escape' && pendingWire) { pendingWire = null; renderCanvas(); }
+  });
+
+  $('template-list').addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-tpl]');
+    if (!btn) return;
+    var tpl = TF.TEMPLATES.find(function (t) { return t.id === btn.getAttribute('data-tpl'); });
+    if (tpl) loadTemplate(tpl);
+  });
+  $('processor-body').addEventListener('click', function (e) {
+    var tr = e.target.closest('[data-proc]');
+    if (!tr) return;
+    selectedProc = +tr.getAttribute('data-proc');
+    renderCost();
+  });
+  $('btn-add-gate').addEventListener('click', addGate);
+  $('btn-add-input').addEventListener('click', function () { addPin('input'); });
+  $('btn-add-output').addEventListener('click', function () { addPin('output'); });
+  $('btn-undo').addEventListener('click', undo);
+  $('btn-redo').addEventListener('click', redo);
+  $('btn-delete').addEventListener('click', deleteSelected);
+  $('btn-clear').addEventListener('click', function () {
+    if (!window.confirm('Clear the whole circuit? (Undo restores it.)')) return;
+    commit();
+    state.circuit = { inputs: [], gates: [], outputs: [] };
+    state.layout = { gates: {}, inputs: {}, outputs: {} };
+    state.inputValues = {};
+    state.templateId = null; state.circuitName = 'Custom circuit';
+    lastVerify = null;
+    $('verify-summary').innerHTML = 'Press <b>Verify circuit</b> to run it.';
+    $('verify-table-wrap').innerHTML = '';
+    renderAll();
+  });
+  $('btn-verify').addEventListener('click', runVerify);
+  $('btn-zoom-in').addEventListener('click', function () { setZoom('in'); });
+  $('btn-zoom-out').addEventListener('click', function () { setZoom('out'); });
+  $('btn-zoom-fit').addEventListener('click', function () { setZoom('fit'); });
+  $('btn-zoom-100').addEventListener('click', function () { setZoom('100'); });
+  $('hint-close').addEventListener('click', function () {
+    var h = $('hint-bar');
+    if (h) h.setAttribute('hidden', ''); // hidden by #hint-bar[hidden] in style.css
+  });
+  $('chk-open-fee').addEventListener('change', renderCost);
+  $('btn-download').addEventListener('click', function () {
+    var text = TF.exportNetlist(state.circuit, state.circuitName);
+    var blob = new Blob([text], { type: 'text/plain' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'tapeforge-' + state.circuitName.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.txt';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  });
+  $('btn-copy').addEventListener('click', function () {
+    var text = TF.exportNetlist(state.circuit, state.circuitName);
+    var done = function () { $('btn-copy').textContent = '✓ Copied'; setTimeout(function () { $('btn-copy').textContent = '⧉ Copy'; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
+    else { fallbackCopy(text); done(); }
+  });
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+    ta.remove();
+  }
+
+  // ------------------------------------------------------------ init
+  // Test/debug handle (used by smoke-test.js). Harmless in the browser.
+  window.TapeForgeApp = {
+    loadTemplate: loadTemplate, runVerify: runVerify,
+    undo: undo, redo: redo, refreshLive: refreshLive,
+    getState: function () { return state; },
+    getProcessors: function () { return processors; },
+    isLive: function () { return dataLive; }
+  };
+  loadTemplate(TF.TEMPLATES.find(function (t) { return t.id === 'consensus'; }));
+  // Re-fit on window resize when in Fit mode (guarded: the headless DOM shim
+  // has no window.addEventListener).
+  if (typeof window.addEventListener === 'function') {
+    window.addEventListener('resize', function () { if (zoomMode === 'fit') renderCanvas(); });
+  }
+  // Background live refresh: tries the public X Layer RPC, falls back to the
+  // cached snapshot (already rendered) if it is unreachable.
+  setTimeout(refreshLive, 800);
+})();
+
+</script>
+</body>
+</html>
