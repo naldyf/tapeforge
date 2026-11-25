@@ -31,23 +31,28 @@
   // Totals at snapshot time: 450 processors, 12,242 circuits, median price 0.00066 OKB.
   // minted/cap/circuits are DECIMAL STRINGS: some caps (1e24) exceed the
   // exact-integer range of a JS number, so all arithmetic on them is BigInt.
+  // protocolFeeWei / tapeoutFeeWei are also per-processor DECIMAL STRINGS,
+  // read live on X Layer (block 76,845,204): protocolFee is PER TOKEN and
+  // differs — 660,000,000,000,000 wei (0.00066 OKB) on 9898, FAB-Genisis,
+  // TAPELIQUID and XBOT, but 1,000,000 wei on ViperX and Cheapest. It must
+  // never be assumed equal across processors (the old code threw
+  // "protocolFee differs" and the live refresh could never succeed).
+  // TAPEOUT_FEE is 1,300,000,000,000,000 wei (0.0013 OKB) on all six today.
   var SNAPSHOT_AT = '25 Nov 2026, 12:53 UTC';
   var processors = [
-    { name: '9898', address: '0x60918c204f3c94630d3d793738fc36293c8405d6', transistor: '0x0f7e9ed401fe35010ebc4d021a204ba031a23194', priceWei: '1000000000000', minted: '16511', cap: '1000000000000', circuits: '1022', note: 'cheapest proven fab' },
-    { name: 'FAB-Genisis', address: '0x87bfca3494aa228ff589ab9b642143a5e8c8f9a6', transistor: '0xbe6f94115d32f3ac3252bc4626573e739beeb714', priceWei: '500000000000000', minted: '1000000', cap: '1000000', circuits: '7164', note: 'most circuits' },
-    { name: 'TAPELIQUID', address: '0x69f663931209096037474d7c20402232e5c762ca', transistor: '0x3fa393d3081accff9e7989619b688235f6d3ee3f', priceWei: '660000000000000', minted: '2100000', cap: '2100000', circuits: '1408', note: 'median price' },
-    { name: 'XBOT', address: '0xa5fc69Ca2D3d462CCa204D894D85ac8071c4F0f0', transistor: '0x7bE7280e31984d18f62218519985EC5DcCa751De', priceWei: '9000000000000000', minted: '40', cap: '1000000000', circuits: '5', note: 'consensus-circuit processor' },
-    { name: 'ViperX', address: '0xb57b56034e2dc25161e2512CfC40b24EA3bee1Fb', transistor: '0xfce5366485140045e95ebdba88ad775fc4aad79f', priceWei: '0', minted: '158', cap: '158', circuits: '4', note: 'free, sold out' },
-    { name: 'Cheapest available', address: '0x99081e1d0ce916cd5b2c53e769dfc3b000bfe9a4', transistor: '0x80a7eb72bc4e559c47304efe6a0f6e73717df5cb', priceWei: '1', minted: '281', cap: '1000000000000000000000000', circuits: '19', note: '1 wei / transistor' }
+    { name: '9898', address: '0x60918c204f3c94630d3d793738fc36293c8405d6', transistor: '0x0f7e9ed401fe35010ebc4d021a204ba031a23194', priceWei: '1000000000000', minted: '16511', cap: '1000000000000', circuits: '1022', protocolFeeWei: '660000000000000', tapeoutFeeWei: '1300000000000000', note: 'cheapest proven fab' },
+    { name: 'FAB-Genisis', address: '0x87bfca3494aa228ff589ab9b642143a5e8c8f9a6', transistor: '0xbe6f94115d32f3ac3252bc4626573e739beeb714', priceWei: '500000000000000', minted: '1000000', cap: '1000000', circuits: '7164', protocolFeeWei: '660000000000000', tapeoutFeeWei: '1300000000000000', note: 'most circuits' },
+    { name: 'TAPELIQUID', address: '0x69f663931209096037474d7c20402232e5c762ca', transistor: '0x3fa393d3081accff9e7989619b688235f6d3ee3f', priceWei: '660000000000000', minted: '2100000', cap: '2100000', circuits: '1408', protocolFeeWei: '660000000000000', tapeoutFeeWei: '1300000000000000', note: 'median price' },
+    { name: 'XBOT', address: '0xa5fc69Ca2D3d462CCa204D894D85ac8071c4F0f0', transistor: '0x7bE7280e31984d18f62218519985EC5DcCa751De', priceWei: '9000000000000000', minted: '40', cap: '1000000000', circuits: '5', protocolFeeWei: '660000000000000', tapeoutFeeWei: '1300000000000000', note: 'consensus-circuit processor' },
+    { name: 'ViperX', address: '0xb57b56034e2dc25161e2512CfC40b24EA3bee1Fb', transistor: '0xfce5366485140045e95ebdba88ad775fc4aad79f', priceWei: '0', minted: '158', cap: '158', circuits: '4', protocolFeeWei: '1000000', tapeoutFeeWei: '1300000000000000', note: 'free, sold out' },
+    { name: 'Cheapest available', address: '0x99081e1d0ce916cd5b2c53e769dfc3b000bfe9a4', transistor: '0x80a7eb72bc4e559c47304efe6a0f6e73717df5cb', priceWei: '1', minted: '281', cap: '1000000000000000000000000', circuits: '19', protocolFeeWei: '1000000', tapeoutFeeWei: '1300000000000000', note: '1 wei / transistor' }
   ];
-  // Protocol-wide fee constants, verified live on X Layer (audit §3).
-  // Same on 9898, FAB-Genisis and XBOT; used as the snapshot values until a
-  // live refresh replaces them. The old hardcoded 0.0066 OKB
+  // The factory deploy fee is the only fee that is truly global (one value
+  // from the factory contract). The old hardcoded 0.0066 OKB
   // "processor-opening fee" was stale and wrong — the live deployFee is
-  // 10,000,000 wei = 0.00000000001 OKB.
+  // 10,000,000 wei = 0.00000000001 OKB. protocolFee and TAPEOUT_FEE are
+  // per-processor and live on each processor object (see above).
   var liveFees = {
-    protocolFeeWei: 660000000000000n,   // 0.00066 OKB, once per mint call
-    tapeoutFeeWei: 1300000000000000n,   // 0.0013 OKB
     deployFeeWei: 10000000n             // 0.00000000001 OKB
   };
   var dataLive = false, liveBlock = null, liveAt = null;
@@ -531,10 +536,12 @@
           '<p class="panel-note">This processor cannot fill a ' + enc.gates + '-gate order. Pick another processor above.</p>';
       } else {
         var includeDeploy = $('chk-open-fee').checked;
+        // The quote uses the SELECTED processor's own fees: protocolFee
+        // and TAPEOUT_FEE are per-processor (see the snapshot comment).
         var est = TF.costEstimate(enc.gates, {
           mintPriceWei: BigInt(p.priceWei),
-          protocolFeeWei: liveFees.protocolFeeWei,
-          tapeoutFeeWei: liveFees.tapeoutFeeWei,
+          protocolFeeWei: BigInt(p.protocolFeeWei),
+          tapeoutFeeWei: BigInt(p.tapeoutFeeWei),
           deployFeeWei: includeDeploy ? liveFees.deployFeeWei : 0n
         });
         var usd = Number(est.totalWei) / 1e18 * OKB_USD;
@@ -594,12 +601,41 @@
   // stage a complete new result and publish ONLY after the whole quote
   // validates; retry the WHOLE read on the second RPC endpoint; never
   // publish a partial read and never present a failed read as live data.
+  // The public X Layer RPC intermittently drops connections (the parent
+  // measured ~3 of ~13 calls failing with "Remote end closed connection
+  // without response"), so transport failures are RETRIED: rpcCall retries
+  // a single request up to 3 times (300/700/1500 ms backoff) and batch
+  // retries a failed chunk up to 2 more times. A JSON-RPC response that
+  // arrives carrying an `error` field is a REAL error, not a network
+  // failure, and is never retried. A refresh that still fails falls back
+  // to the cached snapshot — never to a partial or fake live price.
   var refreshSeq = 0, refreshInFlight = false, refreshStatus = '';
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  // Delays between rpcCall attempts (3 retries after the first try).
+  var RPC_RETRY_DELAYS = [300, 700, 1500];
   function rpcCall(url, payload) {
-    return fetch(url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload), signal: AbortSignal.timeout(20000)
-    }).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+    // Retry ONLY a transport failure: the fetch rejected (connection
+    // closed, timeout), the HTTP status was not OK, or the body was not
+    // usable JSON — i.e. no usable response arrived at all. A JSON-RPC
+    // response that arrives carrying an `error` field resolves here and
+    // is rejected by the callers (batch/tryRead) without any retry.
+    var attempt = 0;
+    function tryOnce() {
+      return fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload), signal: AbortSignal.timeout(20000)
+      }).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .catch(function (e) {
+        if (attempt < RPC_RETRY_DELAYS.length) {
+          var delay = RPC_RETRY_DELAYS[attempt++];
+          return sleep(delay).then(tryOnce);
+        }
+        var err = new Error('RPC request failed after ' + (attempt + 1) + ' attempts: ' + e.message);
+        err.retryable = true; // transport failure — a batch may retry the chunk
+        throw err;
+      });
+    }
+    return tryOnce();
   }
   function isWord(h) { return typeof h === 'string' && /^0x[0-9a-fA-F]{64}$/.test(h); }
   function wordBigInt(h) {
@@ -619,24 +655,45 @@
     for (var i = 0; i < pairs.length; i += 10) {
       (function (part) {
         chain = chain.then(function () {
-          return rpcCall(url, part.map(function (p, k) {
-            return { jsonrpc: '2.0', id: k, method: 'eth_call', params: [{ to: p[0], data: p[1] }, blockHex] };
-          })).then(function (res) {
-            var arr = Array.isArray(res) ? res : [res];
-            if (arr.length !== part.length) throw new Error('batch returned ' + arr.length + ' results for ' + part.length + ' requests');
-            var byId = {};
-            arr.forEach(function (o) {
-              if (!o || o.error) throw new Error('JSON-RPC error for id ' + (o && o.id) + ': ' + JSON.stringify(o && o.error));
-              if (byId[o.id] !== undefined) throw new Error('duplicate response id ' + o.id);
-              if (!isWord(o.result)) throw new Error('malformed result for id ' + o.id + ': ' + String(o.result));
-              byId[o.id] = o.result;
+          // One chunk attempt: rpcCall (with its own transport retries) +
+          // strict validation. A validation failure (JSON-RPC error,
+          // malformed word, wrong count, duplicate/missing id) is a real
+          // error and is never retried. Nothing is pushed to `out` until
+          // the whole chunk validates, so a failed chunk never partially
+          // contributes.
+          function attemptChunk() {
+            return rpcCall(url, part.map(function (p, k) {
+              return { jsonrpc: '2.0', id: k, method: 'eth_call', params: [{ to: p[0], data: p[1] }, blockHex] };
+            })).then(function (res) {
+              var arr = Array.isArray(res) ? res : [res];
+              if (arr.length !== part.length) throw new Error('batch returned ' + arr.length + ' results for ' + part.length + ' requests');
+              var byId = {};
+              arr.forEach(function (o) {
+                if (!o || o.error) throw new Error('JSON-RPC error for id ' + (o && o.id) + ': ' + JSON.stringify(o && o.error));
+                if (byId[o.id] !== undefined) throw new Error('duplicate response id ' + o.id);
+                if (!isWord(o.result)) throw new Error('malformed result for id ' + o.id + ': ' + String(o.result));
+                byId[o.id] = o.result;
+              });
+              part.forEach(function (_, k) {
+                if (byId[k] === undefined) throw new Error('missing response for id ' + k);
+                out.push(byId[k]);
+              });
             });
-            part.forEach(function (_, k) {
-              if (byId[k] === undefined) throw new Error('missing response for id ' + k);
-              out.push(byId[k]);
+          }
+          // Retry a failed chunk up to 2 more times — ONLY on a transport
+          // failure (rpcCall exhausted its own retries and marked the
+          // error retryable). Retrying a validation failure would only
+          // fail again.
+          function attemptChunkWithRetry(retriesLeft) {
+            return attemptChunk().catch(function (e) {
+              if (e && e.retryable && retriesLeft > 0) {
+                return sleep(300).then(function () { return attemptChunkWithRetry(retriesLeft - 1); });
+              }
+              throw e;
             });
-          });
-        }).then(function () { return new Promise(function (r) { setTimeout(r, 250); }); });
+          }
+          return attemptChunkWithRetry(2);
+        }).then(function () { return sleep(250); });
       })(pairs.slice(i, i + 10));
     }
     return chain.then(function () { return out; });
@@ -679,25 +736,29 @@
       staged.forEach(function (p) { pairs2.push([p.address, SEL.tapeoutFee]); });
       pairs2.push([FACTORY, SEL.deployFee]);
       return batch(url, pairs2, blockHex).then(function (res2) {
-        var n = staged.length, protocolFee = null, tapeoutFee = null;
+        var n = staged.length;
         staged.forEach(function (p, i) {
           var b = i * 4;
           p.priceWei = wordBigInt(res2[b]).toString();
           p.minted = wordBigInt(res2[b + 1]).toString();
           p.cap = wordBigInt(res2[b + 2]).toString();
-          var pf = wordBigInt(res2[b + 3]);
-          if (protocolFee === null) protocolFee = pf;
-          else if (protocolFee !== pf) throw new Error('protocolFee differs between processors');
+          // protocolFee is PER TOKEN: it differs between processors (on the
+          // live chain ViperX and Cheapest charge 1,000,000 wei while the
+          // other four charge 660,000,000,000,000 wei). Store it per
+          // processor — never assume it is equal across them, or the live
+          // refresh can never succeed.
+          p.protocolFeeWei = wordBigInt(res2[b + 3]).toString();
         });
         for (var k = 0; k < n; k++) {
-          var tf = wordBigInt(res2[n * 4 + k]);
-          if (tapeoutFee === null) tapeoutFee = tf;
-          else if (tapeoutFee !== tf) throw new Error('TAPEOUT_FEE differs between processors');
+          // TAPEOUT_FEE is per processor too; store it per processor (it
+          // happens to be 0.0013 OKB on all six today, but that is not
+          // guaranteed).
+          staged[k].tapeoutFeeWei = wordBigInt(res2[n * 4 + k]).toString();
         }
         var deployFee = wordBigInt(res2[n * 4 + n]);
         return {
           processors: staged,
-          fees: { protocolFeeWei: protocolFee, tapeoutFeeWei: tapeoutFee, deployFeeWei: deployFee },
+          fees: { deployFeeWei: deployFee },
           block: blockNum, blockHex: blockHex
         };
       });
@@ -1119,9 +1180,12 @@
     getState: function () { return state; },
     getProcessors: function () { return processors; },
     getFees: function () {
+      // Fees for the selected processor (protocolFee / TAPEOUT_FEE are
+      // per-processor); deployFee is the single factory value.
+      var p = processors[selectedProc];
       return {
-        protocolFeeWei: liveFees.protocolFeeWei.toString(),
-        tapeoutFeeWei: liveFees.tapeoutFeeWei.toString(),
+        protocolFeeWei: p.protocolFeeWei,
+        tapeoutFeeWei: p.tapeoutFeeWei,
         deployFeeWei: liveFees.deployFeeWei.toString()
       };
     },

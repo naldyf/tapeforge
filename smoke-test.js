@@ -103,12 +103,12 @@ function assertCommon(el, label) {
   const word32 = (n) => '0x' + BigInt(n).toString(16).padStart(64, '0');
   const addrWord = (a) => '0x' + '0'.repeat(24) + a.slice(2).toLowerCase();
   const LIVE = [
-    { address: '0x60918c204f3c94630d3d793738fc36293c8405d6', transistor: '0x0f7e9ed401fe35010ebc4d021a204ba031a23194', priceWei: '2000000000000', minted: 17000, cap: 1000000000000, circuits: 2000 },
-    { address: '0x87bfca3494aa228ff589ab9b642143a5e8c8f9a6', transistor: '0xbe6f94115d32f3ac3252bc4626573e739beeb714', priceWei: '500000000000000', minted: 1000000, cap: 1000000, circuits: 7200 },
-    { address: '0x69f663931209096037474d7c20402232e5c762ca', transistor: '0x3fa393d3081accff9e7989619b688235f6d3ee3f', priceWei: '660000000000000', minted: 2100000, cap: 2100000, circuits: 1410 },
-    { address: '0xa5fc69Ca2D3d462CCa204D894D85ac8071c4F0f0', transistor: '0x7bE7280e31984d18f62218519985EC5DcCa751De', priceWei: '10000000000000000', minted: 41, cap: 1000000000, circuits: 6 },
-    { address: '0xb57b56034e2dc25161e2512CfC40b24EA3bee1Fb', transistor: '0xfce5366485140045e95ebdba88ad775fc4aad79f', priceWei: '0', minted: 158, cap: 158, circuits: 4 },
-    { address: '0x99081e1d0ce916cd5b2c53e769dfc3b000bfe9a4', transistor: '0x80a7eb72bc4e559c47304efe6a0f6e73717df5cb', priceWei: '1', minted: 281, cap: '1000000000000000000000000', circuits: 19 },
+    { address: '0x60918c204f3c94630d3d793738fc36293c8405d6', transistor: '0x0f7e9ed401fe35010ebc4d021a204ba031a23194', priceWei: '2000000000000', minted: 17000, cap: 1000000000000, circuits: 2000, protocolFeeWei: '660000000000000', tapeoutFeeWei: '1300000000000000' },
+    { address: '0x87bfca3494aa228ff589ab9b642143a5e8c8f9a6', transistor: '0xbe6f94115d32f3ac3252bc4626573e739beeb714', priceWei: '500000000000000', minted: 1000000, cap: 1000000, circuits: 7200, protocolFeeWei: '660000000000000', tapeoutFeeWei: '1300000000000000' },
+    { address: '0x69f663931209096037474d7c20402232e5c762ca', transistor: '0x3fa393d3081accff9e7989619b688235f6d3ee3f', priceWei: '660000000000000', minted: 2100000, cap: 2100000, circuits: 1410, protocolFeeWei: '660000000000000', tapeoutFeeWei: '1300000000000000' },
+    { address: '0xa5fc69Ca2D3d462CCa204D894D85ac8071c4F0f0', transistor: '0x7bE7280e31984d18f62218519985EC5DcCa751De', priceWei: '10000000000000000', minted: 41, cap: 1000000000, circuits: 6, protocolFeeWei: '660000000000000', tapeoutFeeWei: '1300000000000000' },
+    { address: '0xb57b56034e2dc25161e2512CfC40b24EA3bee1Fb', transistor: '0xfce5366485140045e95ebdba88ad775fc4aad79f', priceWei: '0', minted: 158, cap: 158, circuits: 4, protocolFeeWei: '1000000', tapeoutFeeWei: '1300000000000000' },
+    { address: '0x99081e1d0ce916cd5b2c53e769dfc3b000bfe9a4', transistor: '0x80a7eb72bc4e559c47304efe6a0f6e73717df5cb', priceWei: '1', minted: 281, cap: '1000000000000000000000000', circuits: 19, protocolFeeWei: '1000000', tapeoutFeeWei: '1300000000000000' },
   ];
   function liveFetch(url, opts) {
     const body = JSON.parse(opts.body);
@@ -128,8 +128,12 @@ function assertCommon(el, label) {
         else if (data === '0x8f770ad0') result = proc ? word32(proc.cap) : result;
         // New fee selectors (audit §3): protocolFee on the token,
         // TAPEOUT_FEE on the processor, deployFee on the factory.
-        else if (data === '0xb0e21e8a') result = word32(660000000000000);
-        else if (data === '0xadfb2b69') result = word32(1300000000000000);
+        // protocolFee is PER TOKEN and differs on the live chain: ViperX
+        // and Cheapest charge 1,000,000 wei, the other four 0.00066 OKB.
+        // The refresh must succeed anyway (per-processor fees), so the
+        // mock mirrors the live values.
+        else if (data === '0xb0e21e8a') result = proc ? word32(proc.protocolFeeWei) : result;
+        else if (data === '0xadfb2b69') result = proc ? word32(proc.tapeoutFeeWei) : result;
         else if (data === '0xeb2a5d2c') result = word32(10000000);
         return { jsonrpc: '2.0', id: req.id, result };
       }
@@ -151,6 +155,90 @@ function assertCommon(el, label) {
     (el2['lbl-open-fee-text'].textContent || '').includes('0.00000000001 OKB'));
   check('live fees read from the mock (protocol 0.00066 + tape-out 0.0013 in the total)',
     el2['cost-breakdown'].innerHTML.includes('0.00066 OKB') && el2['cost-breakdown'].innerHTML.includes('0.0013 OKB'));
+  // Per-processor protocol fee: the mock mirrors the live chain (ViperX and
+  // Cheapest charge 1,000,000 wei, the other four 0.00066 OKB). The refresh
+  // must succeed anyway — the old code threw "protocolFee differs" and the
+  // live refresh could never complete. Each processor's quote must use its
+  // OWN protocol fee.
+  {
+    const app2 = sb2.window.TapeForgeApp;
+    app2.selectProcessor(5); // Cheapest available
+    check('Cheapest quote uses its own protocol fee (0.000000000001 OKB)',
+      el2['cost-breakdown'].innerHTML.includes('0.000000000001 OKB'),
+      el2['cost-breakdown'].innerHTML.replace(/<[^>]+>/g, ' ').slice(0, 200));
+    app2.selectProcessor(0); // 9898 again
+    check('9898 quote uses its own protocol fee (0.00066 OKB)',
+      el2['cost-breakdown'].innerHTML.includes('0.00066 OKB'));
+    check('per-processor fees stored on the processor objects',
+      app2.getProcessors()[5].protocolFeeWei === '1000000' && app2.getProcessors()[0].protocolFeeWei === '660000000000000');
+    check('getFees returns the selected processor\'s fees',
+      app2.getFees().protocolFeeWei === '660000000000000' && app2.getFees().deployFeeWei === '10000000');
+  }
+
+  // ---- scenarios 3–5: flaky RPC retry (the public X Layer RPC drops
+  // connections intermittently). failFn(callIndex, body) decides whether a
+  // call drops (rejects, as a closed connection would) or is answered.
+  function makeFlakyFetch(failFn) {
+    let n = 0;
+    return function (url, opts) {
+      n++;
+      const body = JSON.parse(opts.body);
+      if (failFn(n, body)) return Promise.reject(new Error('Remote end closed connection without response'));
+      return liveFetch(url, opts);
+    };
+  }
+
+  // ---- scenario 3: rpcCall retry — the first 2 calls drop, the 3rd
+  // attempt of the chainId call succeeds, and the refresh completes live.
+  console.log('\n[flaky RPC — rpcCall retry]');
+  {
+    const sb3 = makeSandbox(makeFlakyFetch((n) => n <= 2));
+    const el3 = loadApp(sb3);
+    const app3 = sb3.window.TapeForgeApp;
+    const ok3 = await app3.refreshLive(); // direct call; the background one no-ops (in flight)
+    check('refresh completes with live data despite 2 dropped calls', ok3 === true && app3.isLive() === true);
+    check('data source flips to LIVE after rpcCall retries', el3['data-source'].innerHTML.includes('LIVE'));
+    check('9898 price updated after rpcCall retries', el3['processor-body'].innerHTML.includes('0.000002 OKB'));
+    check('cost re-priced after rpcCall retries (0.001984 OKB)',
+      el3['cost-breakdown'].innerHTML.includes('0.001984 OKB'));
+  }
+
+  // ---- scenario 4: batch retry — the first 4 batch-chunk calls drop,
+  // exhausting rpcCall's own retries for the first chunk; the batch-level
+  // retry then succeeds and the refresh completes live.
+  console.log('\n[flaky RPC — batch retry]');
+  {
+    let batchDrops = 0;
+    const sb4 = makeSandbox(makeFlakyFetch((n, body) => {
+      if (!Array.isArray(body)) return false; // chainId / blockNumber answer
+      batchDrops++;
+      return batchDrops <= 4; // drop the first 4 chunk calls, answer the batch retry
+    }));
+    const el4 = loadApp(sb4);
+    const app4 = sb4.window.TapeForgeApp;
+    const ok4 = await app4.refreshLive();
+    check('refresh completes with live data despite a dropped batch chunk', ok4 === true && app4.isLive() === true);
+    check('data source flips to LIVE after batch retry', el4['data-source'].innerHTML.includes('LIVE'));
+    check('9898 circuits updated after batch retry (2,000)', el4['processor-body'].innerHTML.includes('2,000'));
+  }
+
+  // ---- scenario 5: persistent failure — the RPC keeps dropping every
+  // call; the refresh must fail cleanly and the app must keep the cached
+  // snapshot, never a partial or fake live price.
+  console.log('\n[persistent failure — snapshot fallback]');
+  {
+    const sb5 = makeSandbox(() => Promise.reject(new Error('Remote end closed connection without response')));
+    const el5 = loadApp(sb5);
+    const app5 = sb5.window.TapeForgeApp;
+    const ok5 = await app5.refreshLive();
+    check('refresh reports failure (false) when the RPC keeps failing', ok5 === false);
+    check('app is NOT live after a failed refresh', app5.isLive() === false);
+    check('data source still says cached snapshot', el5['data-source'].innerHTML.includes('cached snapshot'));
+    check('cost total stays the snapshot total (0.001972 OKB)',
+      el5['cost-breakdown'].innerHTML.includes('0.001972 OKB'));
+    check('no fake live price shown (9898 still at snapshot 0.000001 OKB)',
+      el5['processor-body'].innerHTML.includes('0.000001 OKB'));
+  }
 
   // ---- verify flow in the DOM (adder, exhaustive) ----
   console.log('\n[verify flow]');
