@@ -89,22 +89,25 @@
         <tbody id="processor-body"></tbody>
       </table>
       <div id="cost-breakdown"></div>
-      <label class="check"><input type="checkbox" id="chk-open-fee"> Include processor-opening fee (0.0066 OKB) — only if you open your own processor</label>
+      <label class="check"><input type="checkbox" id="chk-open-fee"> <span id="lbl-open-fee-text">Include processor-opening fee — only if you open your own processor</span></label>
       <p class="panel-note" id="okb-note">OKB ≈ $79 (25 Nov 2026) — USD figure is an estimate only.</p>
     </section>
 
-    <section class="panel" id="export-panel" aria-label="Netlist export">
-      <h2>Export netlist</h2>
-      <p class="panel-note">The exact NAND netlist for this circuit, ready to tape out.</p>
+    <section class="panel" id="export-panel" aria-label="Tape-out export">
+      <h2>Export — tape-out bytes</h2>
+      <p class="panel-note">The tape-out deliverable is the protocol bytes (Download .bin / Copy hex). The text below is a DRAFT preview only — not submittable.</p>
+      <div id="export-status"></div>
+      <p class="panel-note">Protocol payload (hex):</p>
+      <pre id="payload-hex"></pre>
       <pre id="netlist-view"></pre>
       <div class="btn-row">
-        <button id="btn-download" class="primary">⬇ Download .txt</button>
-        <button id="btn-copy">⧉ Copy</button>
+        <button id="btn-download" class="primary">⬇ Download .bin</button>
+        <button id="btn-copy">⧉ Copy hex</button>
       </div>
       <h3>How to tape it out</h3>
       <ol class="howto">
-        <li>Pick a processor above (cheapest with supply is highlighted) and mint as many of its transistors as you have gates.</li>
-        <li>Burn those transistors to etch this netlist as a circuit (ERC-721). Tape-out fee ≈ 0.0013 OKB.</li>
+        <li>Pick a processor above (cheapest with supply is highlighted) and mint as many of its transistors as you have gates — one mint call; the protocol fee (0.00066 OKB) is charged once per mint, plus the per-transistor mint price.</li>
+        <li>Burn those transistors to etch this netlist as a circuit (ERC-721). Tape-out fee 0.0013 OKB.</li>
         <li>Anyone can then call the circuit read-only, for free, and check its outputs.</li>
       </ol>
     </section>

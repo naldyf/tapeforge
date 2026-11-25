@@ -43,7 +43,10 @@ html = html.replace(appTag, () => '<script>\n' + app + '\n</script>');
 // The output must contain both sources whole (a mangled inline would fail
 // these markers — this is what caught the $-pattern bug above).
 if (!html.includes('setTimeout(refreshLive, 800);')) throw new Error('output is missing the tail of app.js');
-if (!html.includes('PROCESSOR_OPEN_FEE_OKB: PROCESSOR_OPEN_FEE_OKB')) throw new Error('output is missing the tail of circuit.js');
+// circuit.js tail marker: the old PROCESSOR_OPEN_FEE_OKB marker never
+// existed in circuit.js (it was an app.js reference to a field circuit.js
+// does not export); use a real export from circuit.js's return object.
+if (!html.includes('PAYLOAD_HEADER_BYTES: PAYLOAD_HEADER_BYTES')) throw new Error('output is missing the tail of circuit.js');
 
 // The output must not reference any file: no <link>, no external <script src>,
 // no href/src pointing at a local .css/.js/.html file.

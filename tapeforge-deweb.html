@@ -203,6 +203,15 @@ td.fail { color: var(--red); font-weight: 700; }
 .check { display: block; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
 
 /* ---------- export ---------- */
+#export-status { font-size: 13px; margin-bottom: 8px; }
+#export-status .pass { color: var(--green); font-weight: 700; }
+#export-status .fail { color: var(--red); font-weight: 700; }
+#payload-hex {
+  background: #080b0f; border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px; font-family: var(--mono); font-size: 11px; line-height: 1.45;
+  max-height: 120px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+  margin: 0 0 10px; color: #c9d6e3;
+}
 #netlist-view {
   background: #080b0f; border: 1px solid var(--border); border-radius: 6px;
   padding: 10px; font-family: var(--mono); font-size: 11.5px; line-height: 1.45;
@@ -311,22 +320,25 @@ footer p { margin: 0; }
         <tbody id="processor-body"></tbody>
       </table>
       <div id="cost-breakdown"></div>
-      <label class="check"><input type="checkbox" id="chk-open-fee"> Include processor-opening fee (0.0066 OKB) — only if you open your own processor</label>
+      <label class="check"><input type="checkbox" id="chk-open-fee"> <span id="lbl-open-fee-text">Include processor-opening fee — only if you open your own processor</span></label>
       <p class="panel-note" id="okb-note">OKB ≈ $79 (25 Nov 2026) — USD figure is an estimate only.</p>
     </section>
 
-    <section class="panel" id="export-panel" aria-label="Netlist export">
-      <h2>Export netlist</h2>
-      <p class="panel-note">The exact NAND netlist for this circuit, ready to tape out.</p>
+    <section class="panel" id="export-panel" aria-label="Tape-out export">
+      <h2>Export — tape-out bytes</h2>
+      <p class="panel-note">The tape-out deliverable is the protocol bytes (Download .bin / Copy hex). The text below is a DRAFT preview only — not submittable.</p>
+      <div id="export-status"></div>
+      <p class="panel-note">Protocol payload (hex):</p>
+      <pre id="payload-hex"></pre>
       <pre id="netlist-view"></pre>
       <div class="btn-row">
-        <button id="btn-download" class="primary">⬇ Download .txt</button>
-        <button id="btn-copy">⧉ Copy</button>
+        <button id="btn-download" class="primary">⬇ Download .bin</button>
+        <button id="btn-copy">⧉ Copy hex</button>
       </div>
       <h3>How to tape it out</h3>
       <ol class="howto">
-        <li>Pick a processor above (cheapest with supply is highlighted) and mint as many of its transistors as you have gates.</li>
-        <li>Burn those transistors to etch this netlist as a circuit (ERC-721). Tape-out fee ≈ 0.0013 OKB.</li>
+        <li>Pick a processor above (cheapest with supply is highlighted) and mint as many of its transistors as you have gates — one mint call; the protocol fee (0.00066 OKB) is charged once per mint, plus the per-transistor mint price.</li>
+        <li>Burn those transistors to etch this netlist as a circuit (ERC-721). Tape-out fee 0.0013 OKB.</li>
         <li>Anyone can then call the circuit read-only, for free, and check its outputs.</li>
       </ol>
     </section>
@@ -555,21 +567,58 @@ footer p { margin: 0; }
     }
   ];
 
+
   // ------------------------------------------------------------- compilation
   // Compile a circuit into flat arrays for fast repeated evaluation.
   // values[] layout: [0..nInputs) inputs, [nInputs..nInputs+nGates) gate outputs,
-  // [nInputs+nGates] constant 0 (unconnected gate inputs read as 0).
+  // [nInputs+nGates] constant 0 (an intentionally open gate input reads as 0
+  // in the LIVE preview only — open ports BLOCK verify/export, see below).
+  //
+  // Strict validation (audit §1): every source reference is checked against
+  // a Map of known IDs. A reference to an unknown ID or with a bad kind is a
+  // HARD ERROR (it is never silently resolved to 0). A null reference is an
+  // intentionally open editor port: it is allowed in the live preview but is
+  // recorded per-port in unconnectedPorts / unwiredOutputs and blocks
+  // encode/verify/export. Duplicate IDs (across inputs, gates and outputs)
+  // are a hard error. ID tables use Map, never plain-object `in` lookups.
   function compile(circuit) {
     var nIn = circuit.inputs.length, nG = circuit.gates.length;
-    var gateIdx = {}, inIdx = {};
-    circuit.gates.forEach(function (g, i) { gateIdx[g.id] = i; });
-    circuit.inputs.forEach(function (p, i) { inIdx[p.id] = i; });
+    var gateIdx = new Map(), inIdx = new Map(), outIdx = new Map();
+    var duplicateIds = [], seenIds = new Map();
+    function noteId(kind, id) {
+      if (seenIds.has(id)) duplicateIds.push(id);
+      else seenIds.set(id, kind);
+    }
+    circuit.inputs.forEach(function (p, i) { noteId('input', p.id); inIdx.set(p.id, i); });
+    circuit.gates.forEach(function (g, i) { noteId('gate', g.id); gateIdx.set(g.id, i); });
+    circuit.outputs.forEach(function (o, i) { noteId('output', o.id); outIdx.set(o.id, i); });
+    if (duplicateIds.length > 0) {
+      return { error: 'duplicate id(s): ' + duplicateIds.join(', ') + ' — every input, gate and output id must be unique' };
+    }
+    // Validate every reference. A broken reference is a hard error.
+    var brokenRefs = [];
+    function checkRef(ref, where) {
+      if (ref === null || ref === undefined) return; // open port — recorded below, not broken
+      if (typeof ref !== 'object' || (ref.k !== 'i' && ref.k !== 'g') || typeof ref.id !== 'string') {
+        brokenRefs.push(where + ': malformed reference ' + JSON.stringify(ref));
+        return;
+      }
+      if (ref.k === 'i' && !inIdx.has(ref.id)) brokenRefs.push(where + ': unknown input id "' + ref.id + '"');
+      if (ref.k === 'g' && !gateIdx.has(ref.id)) brokenRefs.push(where + ': unknown gate id "' + ref.id + '"');
+    }
+    circuit.gates.forEach(function (g) {
+      checkRef(g.a, 'gate ' + g.id + ' input a');
+      checkRef(g.b, 'gate ' + g.id + ' input b');
+    });
+    circuit.outputs.forEach(function (o) { checkRef(o.src, 'output ' + o.id + ' (' + o.name + ')'); });
+    if (brokenRefs.length > 0) {
+      return { error: 'broken reference(s): ' + brokenRefs.join('; ') };
+    }
     var CONST0 = nIn + nG;
     function srcSlot(s) {
-      if (!s) return CONST0;
-      if (s.k === 'i') return (s.id in inIdx) ? inIdx[s.id] : CONST0;
-      if (s.k === 'g') return (s.id in gateIdx) ? nIn + gateIdx[s.id] : CONST0;
-      return CONST0;
+      if (!s) return CONST0; // open port — reads as 0 in the live preview only
+      if (s.k === 'i') return inIdx.get(s.id);
+      return nIn + gateIdx.get(s.id);
     }
     // Kahn topological sort (detects combinational loops).
     var indeg = new Array(nG).fill(0), adj = [];
@@ -577,7 +626,7 @@ footer p { margin: 0; }
     for (var k = 0; k < nG; k++) {
       var deps = [];
       [circuit.gates[k].a, circuit.gates[k].b].forEach(function (s) {
-        if (s && s.k === 'g' && (s.id in gateIdx)) deps.push(gateIdx[s.id]);
+        if (s && s.k === 'g') deps.push(gateIdx.get(s.id));
       });
       deps.forEach(function (d) { indeg[k]++; adj[d].push(k); });
     }
@@ -589,22 +638,33 @@ footer p { margin: 0; }
       order.push(u);
       adj[u].forEach(function (v) { if (--indeg[v] === 0) q.push(v); });
     }
-    if (order.length !== nG) return { error: 'combinational loop: ' + (nG - order.length) + ' gate(s) form a cycle (NAND circuits here must be acyclic)' };
+    if (order.length !== nG) {
+      var unevaluated = [];
+      var inOrder = {};
+      order.forEach(function (gi) { inOrder[gi] = true; });
+      for (var e = 0; e < nG; e++) if (!inOrder[e]) unevaluated.push(circuit.gates[e].id);
+      return { error: 'combinational loop: ' + unevaluated.length + ' gate(s) could not be evaluated (' + unevaluated.join(', ') + ') — NAND circuits here must be acyclic', unevaluated: unevaluated };
+    }
     var aSrc = [], bSrc = [];
     for (var j = 0; j < nG; j++) {
       aSrc.push(srcSlot(circuit.gates[j].a));
       bSrc.push(srcSlot(circuit.gates[j].b));
     }
     var outSrc = circuit.outputs.map(function (o) { return srcSlot(o.src); });
-    var unconnected = 0;
+    // Count missing ports INDIVIDUALLY (audit §1 Low): a NAND with both
+    // inputs open is 2 unconnected inputs, not 1.
+    var unconnectedPorts = [];
     circuit.gates.forEach(function (g) {
-      if (!g.a || !g.b) unconnected++;
+      if (!g.a) unconnectedPorts.push({ gateId: g.id, which: 'a' });
+      if (!g.b) unconnectedPorts.push({ gateId: g.id, which: 'b' });
     });
-    var unwiredOutputs = circuit.outputs.filter(function (o) { return !o.src; }).length;
+    var unwiredOutputs = circuit.outputs.filter(function (o) { return !o.src; }).map(function (o) { return o.id; });
     return {
-      nInputs: nIn, nGates: nG, order: order, aSrc: aSrc, bSrc: bSrc,
-      outSrc: outSrc, unconnected: unconnected, unwiredOutputs: unwiredOutputs,
-      const0: CONST0
+      error: null, nInputs: nIn, nGates: nG, order: order, aSrc: aSrc, bSrc: bSrc,
+      outSrc: outSrc, unconnectedPorts: unconnectedPorts, unwiredOutputs: unwiredOutputs,
+      unevaluated: [], const0: CONST0,
+      // Back-compat counts (kept so callers can read a plain number).
+      unconnected: unconnectedPorts.length
     };
   }
 
@@ -620,6 +680,9 @@ footer p { margin: 0; }
     return out;
   }
 
+  // Live preview simulation. Open ports read as 0 (with a warning); broken
+  // references and loops are hard errors. The returned `warnings` carry the
+  // full compile result so the UI can list the exact open ports.
   function simulate(circuit, inputBits) {
     var comp = compile(circuit);
     if (comp.error) return { error: comp.error };
@@ -628,6 +691,207 @@ footer p { margin: 0; }
     var gateValues = {};
     circuit.gates.forEach(function (g, i) { gateValues[g.id] = values[comp.nInputs + i]; });
     return { outputs: outputs, gateValues: gateValues, warnings: comp };
+  }
+
+  // ------------------------------------------------------- TapeOut payload
+  // The governing fix (audit verdict): the DECODED TapeOut payload is the
+  // circuit that Verify checks, Export delivers, and Cost counts.
+  //
+  // PAYLOAD FORMAT — "TapeForge TapeOut payload v1" (documented, self-contained):
+  //   bytes 0..3  : magic "TPO1" (0x54 0x50 0x4F 0x31)
+  //   bytes 4..5  : nIn    (uint16, little-endian)
+  //   bytes 6..7  : nOut   (uint16, little-endian)
+  //   bytes 8..11 : nGates (uint32, little-endian)
+  //   bytes 12..  : nGates records, each 4 bytes: a (uint16 LE), b (uint16 LE)
+  // Signal numbering: 0..nIn-1 are the circuit inputs. Gate i (0-based, in
+  // encoded order) produces signal nIn+i. Each gate's a and b must be
+  // < nIn+i (a BACKWARD reference — a gate may only read signals produced
+  // before it). The outputs are the LAST nOut produced signals
+  // (nIn+nGates-nOut .. nIn+nGates-1), in the order the outputs were declared.
+  //
+  // Encoding: gates are emitted in topological order, except the output
+  // source gates are placed in the final nOut positions (in output order)
+  // where that is topologically possible. Where it is not — the source also
+  // feeds a non-output gate, or it depends on an output declared after it,
+  // or the output is sourced from an input pin — a 2-NAND identity buffer
+  // (NOT(NOT(x))) is appended instead, so the output value lands in the
+  // correct final signal position. The encoder never reorders the six
+  // templates' gates. Five of the six place directly with ZERO buffers; the
+  // comparator needs 4 buffer NANDs (its GT and EQ sources also feed the
+  // NOT gates inside the LT output's OR, so they cannot sit in the final
+  // positions) — 129 editor gates encode to 133. The tests pin this.
+  var PAYLOAD_MAGIC = 'TPO1';
+  var PAYLOAD_HEADER_BYTES = 12;
+
+  function encodePayload(circuit) {
+    var comp = compile(circuit);
+    if (comp.error) return { error: comp.error };
+    if (comp.unconnectedPorts.length > 0) {
+      var ups = comp.unconnectedPorts.map(function (p) { return 'gate ' + p.gateId + ' input ' + p.which; }).join(', ');
+      return { error: 'structural error: unconnected gate input(s): ' + ups + ' — wire every gate input before verifying or exporting' };
+    }
+    if (comp.unwiredOutputs.length > 0) {
+      return { error: 'structural error: unwired output(s): ' + comp.unwiredOutputs.join(', ') + ' — wire every output before verifying or exporting' };
+    }
+    var nIn = circuit.inputs.length, nG = circuit.gates.length, nOut = circuit.outputs.length;
+    if (nOut === 0) return { error: 'structural error: the circuit has no outputs — add an output pin before verifying or exporting' };
+    if (nIn + nG + 2 * nOut > 65535) return { error: 'circuit too large for the payload format (signal index would exceed 65535)' };
+
+    // Dependency graph over gate indices.
+    var gateIdx = new Map();
+    circuit.gates.forEach(function (g, i) { gateIdx.set(g.id, i); });
+    var deps = [], dependents = [];
+    for (var i = 0; i < nG; i++) { deps.push([]); dependents.push([]); }
+    circuit.gates.forEach(function (g, gi) {
+      [g.a, g.b].forEach(function (s) {
+        if (s && s.k === 'g') {
+          var d = gateIdx.get(s.id);
+          deps[gi].push(d);
+          dependents[d].push(gi);
+        }
+      });
+    });
+    // Output source gates, in output declaration order (-1 = sourced from an
+    // input pin, which always needs a buffer).
+    var outGate = circuit.outputs.map(function (o) {
+      if (!o.src || o.src.k !== 'g') return -1;
+      return gateIdx.get(o.src.id);
+    });
+    // Which output source gates can be placed directly in the final nOut
+    // positions? Fixpoint: a source gate is direct only if (a) no non-output
+    // gate depends on it, and (b) it does not depend on an output source
+    // declared after it. Anything else is emitted in its normal topological
+    // position and its output is copied by a 2-NAND buffer at the end.
+    var direct = new Map(); // gate index -> output index, for directly placed sources
+    outGate.forEach(function (gi, oj) { if (gi >= 0) direct.set(gi, oj); });
+    var changed = true;
+    while (changed) {
+      changed = false;
+      var toRemove = [];
+      direct.forEach(function (oj, gi) {
+        var ok = true;
+        dependents[gi].forEach(function (dep) {
+          if (!direct.has(dep)) ok = false; // a normal gate depends on it
+          else if (direct.get(dep) < oj) ok = false; // an earlier output depends on it
+        });
+        deps[gi].forEach(function (d) {
+          if (direct.has(d) && direct.get(d) > oj) ok = false; // depends on a later output
+        });
+        if (!ok) toRemove.push(gi);
+      });
+      toRemove.forEach(function (gi) { direct.delete(gi); changed = true; });
+    }
+    // Emit in three phases so the outputs are EXACTLY the last nOut signals:
+    //   (1) all non-direct gates, in topological order;
+    //   (2) the buf1 (NOT) half of every output buffer — these are ordinary
+    //       intermediate signals and must NOT sit in the final positions;
+    //   (3) the final nOut signals, in output order: a direct source gate,
+    //       or the buf2 (NOT(NOT(x)) = x) half of a buffer.
+    // A buf1 only reads a source that is already emitted (a normal gate or an
+    // input pin), so phase (2) never creates a forward reference.
+    var encoded = []; // {a, b} with a,b = signal indices (resolved below)
+    var sigOfGate = new Map(); // gate index -> signal index, once emitted
+    function inSig(s) {
+      if (s.k === 'i') {
+        var idx = -1;
+        circuit.inputs.forEach(function (p, i) { if (p.id === s.id) idx = i; });
+        return idx;
+      }
+      return nIn + sigOfGate.get(gateIdx.get(s.id));
+    }
+    comp.order.forEach(function (gi) {
+      if (direct.has(gi)) return; // emitted later, in the final positions
+      var g = circuit.gates[gi];
+      var a = inSig(g.a), b = inSig(g.b);
+      sigOfGate.set(gi, encoded.length);
+      encoded.push({ a: a, b: b, src: gi });
+    });
+    var buffers = 0, bufferOutputs = [];
+    var buf1Sig = {}; // output index -> signal index of its buf1 gate
+    circuit.outputs.forEach(function (o, oj) {
+      var gi = outGate[oj];
+      if (gi >= 0 && direct.has(gi)) return; // no buffer for this output
+      var srcSig = (gi >= 0) ? (nIn + sigOfGate.get(gi)) : inSig(o.src);
+      buf1Sig[oj] = nIn + encoded.length;
+      encoded.push({ a: srcSig, b: srcSig, src: null });
+      buffers += 2;
+      bufferOutputs.push(o.name);
+    });
+    circuit.outputs.forEach(function (o, oj) {
+      var gi = outGate[oj];
+      if (gi >= 0 && direct.has(gi)) {
+        var g = circuit.gates[gi];
+        sigOfGate.set(gi, encoded.length);
+        encoded.push({ a: inSig(g.a), b: inSig(g.b), src: gi });
+      } else {
+        encoded.push({ a: buf1Sig[oj], b: buf1Sig[oj], src: null });
+      }
+    });
+    // Validate backward references (safety net — must hold by construction).
+    for (var e = 0; e < encoded.length; e++) {
+      if (encoded[e].a >= nIn + e || encoded[e].b >= nIn + e) {
+        return { error: 'internal error: encoded gate ' + e + ' has a forward reference (a=' + encoded[e].a + ', b=' + encoded[e].b + ')' };
+      }
+      if (encoded[e].a < 0 || encoded[e].b < 0) {
+        return { error: 'internal error: encoded gate ' + e + ' has an unresolved input' };
+      }
+    }
+    var nGates = encoded.length;
+    var bytes = new Uint8Array(PAYLOAD_HEADER_BYTES + 4 * nGates);
+    bytes[0] = 0x54; bytes[1] = 0x50; bytes[2] = 0x4F; bytes[3] = 0x31; // "TPO1"
+    bytes[4] = nIn & 0xff; bytes[5] = (nIn >> 8) & 0xff;
+    bytes[6] = nOut & 0xff; bytes[7] = (nOut >> 8) & 0xff;
+    bytes[8] = nGates & 0xff; bytes[9] = (nGates >> 8) & 0xff;
+    bytes[10] = (nGates >> 16) & 0xff; bytes[11] = (nGates >> 24) & 0xff;
+    for (var r = 0; r < nGates; r++) {
+      var off = PAYLOAD_HEADER_BYTES + 4 * r;
+      bytes[off] = encoded[r].a & 0xff; bytes[off + 1] = (encoded[r].a >> 8) & 0xff;
+      bytes[off + 2] = encoded[r].b & 0xff; bytes[off + 3] = (encoded[r].b >> 8) & 0xff;
+    }
+    var hex = '';
+    for (var h = 0; h < bytes.length; h++) hex += ('0' + bytes[h].toString(16)).slice(-2);
+    return {
+      error: null, bytes: bytes, hex: hex, nIn: nIn, nOut: nOut,
+      nGates: nGates, buffers: buffers, bufferOutputs: bufferOutputs,
+      editorGateCount: nG, encodedGateCount: nGates
+    };
+  }
+
+  // Decode and strictly validate a payload. Returns { error } on any
+  // malformed input (bad magic, wrong length, forward reference, bad counts).
+  function decodePayload(bytes) {
+    if (!bytes || bytes.length < PAYLOAD_HEADER_BYTES) return { error: 'payload too short (' + (bytes ? bytes.length : 0) + ' bytes)' };
+    var b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    if (b[0] !== 0x54 || b[1] !== 0x50 || b[2] !== 0x4F || b[3] !== 0x31) return { error: 'bad payload magic (expected TPO1)' };
+    var nIn = b[4] | (b[5] << 8);
+    var nOut = b[6] | (b[7] << 8);
+    var nGates = (b[8] | (b[9] << 8) | (b[10] << 16) | (b[11] << 24)) >>> 0;
+    if (nOut === 0) return { error: 'payload declares zero outputs' };
+    if (nOut > nGates) return { error: 'payload declares more outputs (' + nOut + ') than gates (' + nGates + ')' };
+    if (b.length !== PAYLOAD_HEADER_BYTES + 4 * nGates) return { error: 'payload length ' + b.length + ' does not match the declared ' + nGates + ' gates' };
+    var gates = [];
+    for (var i = 0; i < nGates; i++) {
+      var off = PAYLOAD_HEADER_BYTES + 4 * i;
+      var a = b[off] | (b[off + 1] << 8);
+      var bb = b[off + 2] | (b[off + 3] << 8);
+      if (a >= nIn + i || bb >= nIn + i) return { error: 'gate ' + i + ' has a forward reference (a=' + a + ', b=' + bb + ', max ' + (nIn + i - 1) + ')' };
+      gates.push({ a: a, b: bb });
+    }
+    return { error: null, nIn: nIn, nOut: nOut, nGates: nGates, gates: gates };
+  }
+
+  // Simulate a DECODED payload. Outputs are the last nOut produced signals.
+  function simulateDecoded(decoded, inputBits) {
+    var n = decoded.nIn;
+    var values = new Array(n + decoded.nGates).fill(0);
+    for (var i = 0; i < n; i++) values[i] = inputBits[i] ? 1 : 0;
+    for (var k = 0; k < decoded.nGates; k++) {
+      var g = decoded.gates[k];
+      values[n + k] = (values[g.a] & values[g.b]) ? 0 : 1;
+    }
+    var out = [];
+    for (var j = 0; j < decoded.nOut; j++) out.push(values[n + decoded.nGates - decoded.nOut + j]);
+    return out;
   }
 
   // ------------------------------------------------------------ verification
@@ -641,14 +905,25 @@ footer p { margin: 0; }
     };
   }
 
-  // Exhaustively simulate every input combination (n <= 16) or a deterministic
-  // sample (n > 16: all-zero, all-one, single-bit, + 4096 seeded random cases).
-  // expectedFn: bits[] -> expected output bits[]; null = structural check only.
+  // Verify the circuit by simulating the DECODED payload bytes — the exact
+  // bytes Export delivers and Cost counts. Encode -> decode -> simulate ->
+  // compare to the expected function. A compile error, a structural error
+  // (open ports, unwired outputs) or an empty circuit NEVER produces a pass
+  // count: it returns { error, total: 0, passed: 0, failed: 0 } with the
+  // error set, so no test can mistake it for a pass (audit §2 Low).
+  // expectedFn: bits[] -> expected output bits[]; null = simulate only, in
+  // which case the result has hasExpected false and passed/failed null — the
+  // UI must show "simulated, no expected function" WITHOUT a pass count.
   function verifyCircuit(circuit, expectedFn) {
-    var comp = compile(circuit);
-    if (comp.error) return { error: comp.error, total: 0, passed: 0, failed: 0, failures: [], sampled: false };
-    var n = circuit.inputs.length;
-    var values = new Array(comp.nInputs + comp.nGates + 1).fill(0);
+    var enc = encodePayload(circuit);
+    if (enc.error) {
+      return { error: enc.error, hasExpected: !!expectedFn, total: 0, passed: 0, failed: 0, failures: [], sampled: false, gateCount: 0, buffers: 0, nIn: circuit.inputs.length, nOut: circuit.outputs.length, inputCount: circuit.inputs.length, outputCount: circuit.outputs.length };
+    }
+    var dec = decodePayload(enc.bytes);
+    if (dec.error) {
+      return { error: 'internal error: the encoded payload failed to decode (' + dec.error + ')', hasExpected: !!expectedFn, total: 0, passed: 0, failed: 0, failures: [], sampled: false, gateCount: 0, buffers: 0, nIn: enc.nIn, nOut: enc.nOut, inputCount: circuit.inputs.length, outputCount: circuit.outputs.length };
+    }
+    var n = enc.nIn;
     var cases = [];
     var sampled = false;
     if (n <= 16) {
@@ -679,8 +954,8 @@ footer p { margin: 0; }
         bits = new Array(n);
         for (var b = 0; b < n; b++) bits[b] = (cases[ci] >> b) & 1;
       }
-      var got = evalCompiled(comp, bits, values);
-      if (!expectedFn) { passed++; continue; }
+      var got = simulateDecoded(dec, bits);
+      if (!expectedFn) continue; // simulated only — no pass count
       var exp = expectedFn(bits);
       var ok = got.length === exp.length;
       if (ok) for (var o = 0; o < got.length; o++) if (got[o] !== exp[o]) { ok = false; break; }
@@ -688,66 +963,123 @@ footer p { margin: 0; }
       else if (failures.length < 20) failures.push({ bits: bits.slice(), got: got.slice(), expected: exp.slice() });
     }
     return {
-      total: cases.length, passed: passed, failed: cases.length - passed,
+      error: null, hasExpected: !!expectedFn,
+      total: cases.length,
+      passed: expectedFn ? passed : null,
+      failed: expectedFn ? (cases.length - passed) : null,
       failures: failures, sampled: sampled,
-      unconnected: comp.unconnected, unwiredOutputs: comp.unwiredOutputs,
-      gateCount: comp.nGates, inputCount: n, outputCount: circuit.outputs.length
+      gateCount: enc.nGates, buffers: enc.buffers, bufferOutputs: enc.bufferOutputs,
+      nIn: enc.nIn, nOut: enc.nOut,
+      inputCount: n, outputCount: circuit.outputs.length
     };
   }
 
   // ---------------------------------------------------------------- netlist
-  function srcName(circuit, s) {
-    if (!s) return '0';
-    if (s.k === 'i') {
-      var p = circuit.inputs.find(function (x) { return x.id === s.id; });
-      return p ? p.name : '?';
-    }
-    var idx = circuit.gates.findIndex(function (g) { return g.id === s.id; });
-    return idx >= 0 ? 'G' + idx : '?';
-  }
-
-  function exportNetlist(circuit, name) {
-    var lines = [];
-    lines.push('# TapeForge netlist — ' + (name || 'untitled circuit'));
-    lines.push('# NAND-only. 1 gate = 1 transistor. TapeOut on X Layer (chain 196).');
-    lines.push('# Inputs (' + circuit.inputs.length + '): ' + circuit.inputs.map(function (p) { return p.name; }).join(' '));
-    lines.push('# Outputs (' + circuit.outputs.length + '): ' + circuit.outputs.map(function (o) { return o.name; }).join(' '));
-    lines.push('# Gates: ' + circuit.gates.length);
-    lines.push('INPUTS ' + circuit.inputs.map(function (p) { return p.name; }).join(' '));
-    lines.push('OUTPUTS ' + circuit.outputs.map(function (o) { return o.name; }).join(' '));
-    circuit.gates.forEach(function (g, i) {
-      lines.push('G' + i + ' = NAND(' + srcName(circuit, g.a) + ', ' + srcName(circuit, g.b) + ')');
-    });
-    circuit.outputs.forEach(function (o) {
-      lines.push(o.name + ' = ' + srcName(circuit, o.src));
-    });
-    lines.push('#');
-    lines.push('# To tape this out (needs a wallet + OKB):');
-    lines.push('# 1. Pick a processor on X Layer (see the Cost panel) and mint ' + circuit.gates.length + ' of its transistors (1 per NAND gate).');
-    lines.push('# 2. Burn the transistors to etch this netlist as a circuit (ERC-721) — the tape-out fee is ~0.0013 OKB.');
-    lines.push('# 3. Anyone can then call the circuit read-only, free, and check its outputs.');
-    return lines.join('\n') + '\n';
-  }
-
-  // -------------------------------------------------------------------- cost
-  var TAPEOUT_FEE_OKB = 0.0013;      // flat tape-out fee, per the TapeOut docs
-  var PROCESSOR_OPEN_FEE_OKB = 0.0066; // flat fee to open your own processor
-  function costEstimate(gateCount, priceOkb) {
-    var transistorCost = gateCount * priceOkb;
+  // The tape-out deliverable is the PROTOCOL BYTES. This function runs the
+  // shared structural + protocol validation (encode -> decode -> re-simulate
+  // one case as a self-check) and returns the bytes, or an error naming the
+  // exact port/gate that blocks export. A disconnected output, a dangling
+  // reference, a self-referencing NAND and a combinational loop all block.
+  function exportTapeout(circuit) {
+    var enc = encodePayload(circuit);
+    if (enc.error) return { error: enc.error };
+    var dec = decodePayload(enc.bytes);
+    if (dec.error) return { error: 'internal error: the encoded payload failed to decode (' + dec.error + ')' };
+    // Self-check: the decoded payload must simulate (one case is enough to
+    // prove the decode path works; full verification is verifyCircuit's job).
+    var probe = simulateDecoded(dec, new Array(enc.nIn).fill(0));
+    if (probe.length !== enc.nOut) return { error: 'internal error: decoded payload produced ' + probe.length + ' outputs, expected ' + enc.nOut };
     return {
-      transistors: gateCount,
-      transistorCost: transistorCost,
-      tapeoutFee: TAPEOUT_FEE_OKB,
-      total: transistorCost + TAPEOUT_FEE_OKB,
-      processorOpenFee: PROCESSOR_OPEN_FEE_OKB
+      error: null, bytes: enc.bytes, hex: enc.hex,
+      nIn: enc.nIn, nOut: enc.nOut, nGates: enc.nGates,
+      buffers: enc.buffers, bufferOutputs: enc.bufferOutputs,
+      editorGateCount: enc.editorGateCount
     };
   }
-  function formatOkb(v) {
-    if (v === 0) return '0';
-    if (v >= 0.01) return v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
-    if (v >= 0.000001) return v.toFixed(9).replace(/0+$/, '').replace(/\.$/, '');
-    return v.toExponential(2);
+
+  // Human-readable draft preview ONLY. It is labelled DRAFT in the header and
+  // must never be presented as submittable: TapeOut consumes the protocol
+  // bytes, not this text. It serializes STABLE signal IDs (in0, g0, out0)
+  // and keeps display names as comments, so a pin renamed to "G0" can never
+  // collide with a gate (audit §4 High).
+  function exportNetlistDraft(circuit, name) {
+    var comp = compile(circuit);
+    var lines = [];
+    lines.push('# TapeForge netlist DRAFT — ' + (name || 'untitled circuit'));
+    lines.push('# DRAFT ONLY — NOT SUBMITTABLE. TapeOut consumes the protocol bytes (see Export), not this text.');
+    lines.push('# Stable signal IDs are used below (in0, g0, out0); display names are comments only.');
+    lines.push('# Inputs (' + circuit.inputs.length + '): ' + circuit.inputs.map(function (p) { return p.id + ' "' + p.name + '"'; }).join(' '));
+    lines.push('# Outputs (' + circuit.outputs.length + '): ' + circuit.outputs.map(function (o) { return o.id + ' "' + o.name + '"'; }).join(' '));
+    if (comp.error) lines.push('# COMPILE ERROR: ' + comp.error);
+    else {
+      lines.push('# Gates: ' + circuit.gates.length + ' (topological order)');
+      if (comp.unconnectedPorts.length) lines.push('# WARNING: ' + comp.unconnectedPorts.length + ' unconnected gate input(s): ' + comp.unconnectedPorts.map(function (p) { return p.gateId + '.' + p.which; }).join(', '));
+      if (comp.unwiredOutputs.length) lines.push('# WARNING: unwired output(s): ' + comp.unwiredOutputs.join(', '));
+    }
+    lines.push('INPUTS ' + circuit.inputs.map(function (p) { return p.id; }).join(' '));
+    lines.push('OUTPUTS ' + circuit.outputs.map(function (o) { return o.id; }).join(' '));
+    function refName(s) {
+      if (!s) return '0';
+      if (s.k === 'i') return s.id;
+      return s.id;
+    }
+    comp.order.forEach(function (gi) {
+      var g = circuit.gates[gi];
+      lines.push(g.id + ' = NAND(' + refName(g.a) + ', ' + refName(g.b) + ')');
+    });
+    circuit.outputs.forEach(function (o) {
+      lines.push(o.id + ' = ' + refName(o.src) + '   # "' + o.name + '"');
+    });
+    lines.push('#');
+    lines.push('# To tape this out, use the protocol bytes (Download .bin / Copy hex) —');
+    lines.push('# the bytes encode the gates above in topological order with the outputs');
+    lines.push('# in the final signal positions. A wallet + OKB are needed to mint and etch.');
+    return lines.join('\n') + '\n';
   }
+  // Back-compat name: the old exportNetlist returned the named-equation text.
+  // It now returns the DRAFT (same text, new header). Callers that need the
+  // tape-out deliverable must use exportTapeout.
+  function exportNetlist(circuit, name) { return exportNetlistDraft(circuit, name); }
+
+  // -------------------------------------------------------------------- cost
+  // All money is integer wei (BigInt) end to end; decimals are formatted only
+  // for display (audit §3 Medium — no parseInt on wei values, no float math).
+  //   total = gates * mintPrice + protocolFee (once per mint call) + tapeoutFee
+  //         (+ deployFee only if opening your own processor).
+  // gateCount MUST be the number of gates in the final ENCODED circuit
+  // (including output buffers), not the editor gate count.
+  function costEstimate(encodedGateCount, fees) {
+    var mintPrice = BigInt(fees.mintPriceWei);
+    var protocolFee = BigInt(fees.protocolFeeWei);
+    var tapeoutFee = BigInt(fees.tapeoutFeeWei);
+    var deployFee = fees.deployFeeWei !== undefined && fees.deployFeeWei !== null ? BigInt(fees.deployFeeWei) : 0n;
+    var transistorCost = BigInt(encodedGateCount) * mintPrice;
+    var total = transistorCost + protocolFee + tapeoutFee + deployFee;
+    return {
+      gates: encodedGateCount,
+      transistorCostWei: transistorCost, protocolFeeWei: protocolFee,
+      tapeoutFeeWei: tapeoutFee, deployFeeWei: deployFee, totalWei: total
+    };
+  }
+  // Format a wei BigInt as an OKB decimal string, integer arithmetic only.
+  // e.g. 2028000000000000n -> "0.002028"; 10000000n -> "0.00000000001".
+  function formatWei(wei) {
+    var w = BigInt(wei);
+    if (w === 0n) return '0';
+    var neg = w < 0n;
+    if (neg) w = -w;
+    var s = w.toString();
+    var out;
+    if (s.length <= 18) out = '0.' + '0'.repeat(18 - s.length) + s;
+    else out = s.slice(0, s.length - 18) + '.' + s.slice(s.length - 18);
+    out = out.replace(/0+$/, '').replace(/\.$/, '');
+    return (neg ? '-' : '') + out;
+  }
+  // Back-compat: the old formatOkb took a float OKB value. It now takes a
+  // wei BigInt (or a decimal string/number of wei) and formats it. Callers
+  // passing a float OKB value will get a wrong result — all callers were
+  // updated to pass wei.
+  function formatOkb(wei) { return formatWei(wei); }
 
   return {
     createBuilder: createBuilder,
@@ -755,11 +1087,17 @@ footer p { margin: 0; }
     compile: compile,
     simulate: simulate,
     verifyCircuit: verifyCircuit,
+    encodePayload: encodePayload,
+    decodePayload: decodePayload,
+    simulateDecoded: simulateDecoded,
+    exportTapeout: exportTapeout,
+    exportNetlistDraft: exportNetlistDraft,
     exportNetlist: exportNetlist,
     costEstimate: costEstimate,
+    formatWei: formatWei,
     formatOkb: formatOkb,
-    TAPEOUT_FEE_OKB: TAPEOUT_FEE_OKB,
-    PROCESSOR_OPEN_FEE_OKB: PROCESSOR_OPEN_FEE_OKB
+    PAYLOAD_MAGIC: PAYLOAD_MAGIC,
+    PAYLOAD_HEADER_BYTES: PAYLOAD_HEADER_BYTES
   };
 });
 
@@ -767,6 +1105,10 @@ footer p { margin: 0; }
 <script>
 // TapeForge — UI layer. Plain DOM + SVG, no framework, no network except the
 // optional X Layer RPC read (refreshLive). All circuit logic lives in circuit.js.
+//
+// Audit fixes (2026-11-25): all money is integer wei (BigInt) end to end;
+// RPC reads pin a block first and publish only a fully validated quote;
+// verify/export/cost all run against the DECODED protocol payload.
 (function () {
   'use strict';
   var TF = window.TapeForgeCircuit;
@@ -774,8 +1116,17 @@ footer p { margin: 0; }
   // ------------------------------------------------------------ data
   var FACTORY = '0x1f09daefa827f02cbb40967cc91b259763760761';
   var RPCS = ['https://rpc.xlayer.tech', 'https://tapeout.net/rpc-xlayer'];
-  // Selectors from the public TapeOut read script (openwitness.net/p/9897):
-  var SEL = { transistors: '0x6fbd1719', nextId: '0x61b8ce8c', price: '0x6817c76c', minted: '0x4f02c420', cap: '0x8f770ad0' };
+  // Selectors from the public TapeOut read script (openwitness.net/p/9897),
+  // plus the fee selectors verified live on X Layer (audit §3):
+  //   mintPrice    0x6817c76c — transistor TOKEN contract
+  //   protocolFee  0xb0e21e8a — transistor TOKEN contract
+  //   TAPEOUT_FEE  0xadfb2b69 — PROCESSOR contract
+  //   deployFee    0xeb2a5d2c — FACTORY contract
+  var SEL = {
+    transistors: '0x6fbd1719', nextId: '0x61b8ce8c',
+    price: '0x6817c76c', minted: '0x4f02c420', cap: '0x8f770ad0',
+    protocolFee: '0xb0e21e8a', tapeoutFee: '0xadfb2b69', deployFee: '0xeb2a5d2c'
+  };
   var OKB_USD = 79; // approx OKB price, 25 Nov 2026 — estimate only
 
   // Cached snapshot — real X Layer processors, read from chain 2026-11-25T12:53:31Z
@@ -783,16 +1134,27 @@ footer p { margin: 0; }
   // Names FAB-Genisis / TAPELIQUID / 9898 are from the 23 Oct 2026 openwitness
   // survey; their addresses match that survey's price + circuit-count signature.
   // Totals at snapshot time: 450 processors, 12,242 circuits, median price 0.00066 OKB.
+  // minted/cap/circuits are DECIMAL STRINGS: some caps (1e24) exceed the
+  // exact-integer range of a JS number, so all arithmetic on them is BigInt.
   var SNAPSHOT_AT = '25 Nov 2026, 12:53 UTC';
   var processors = [
-    { name: '9898', address: '0x60918c204f3c94630d3d793738fc36293c8405d6', transistor: '0x0f7e9ed401fe35010ebc4d021a204ba031a23194', priceWei: '1000000000000', minted: 16511, cap: 1000000000000, circuits: 1022, note: 'cheapest proven fab' },
-    { name: 'FAB-Genisis', address: '0x87bfca3494aa228ff589ab9b642143a5e8c8f9a6', transistor: '0xbe6f94115d32f3ac3252bc4626573e739beeb714', priceWei: '500000000000000', minted: 1000000, cap: 1000000, circuits: 7164, note: 'most circuits' },
-    { name: 'TAPELIQUID', address: '0x69f663931209096037474d7c20402232e5c762ca', transistor: '0x3fa393d3081accff9e7989619b688235f6d3ee3f', priceWei: '660000000000000', minted: 2100000, cap: 2100000, circuits: 1408, note: 'median price' },
-    { name: 'XBOT', address: '0xa5fc69Ca2D3d462CCa204D894D85ac8071c4F0f0', transistor: '0x7bE7280e31984d18f62218519985EC5DcCa751De', priceWei: '9000000000000000', minted: 40, cap: 1000000000, circuits: 5, note: 'consensus-circuit processor' },
-    { name: 'ViperX', address: '0xb57b56034e2dc25161e2512CfC40b24EA3bee1Fb', transistor: '0xfce5366485140045e95ebdba88ad775fc4aad79f', priceWei: '0', minted: 158, cap: 158, circuits: 4, note: 'free, sold out' },
-    { name: 'Cheapest available', address: '0x99081e1d0ce916cd5b2c53e769dfc3b000bfe9a4', transistor: '0x80a7eb72bc4e559c47304efe6a0f6e73717df5cb', priceWei: '1', minted: 281, cap: 1e24, circuits: 19, note: '1 wei / transistor' }
+    { name: '9898', address: '0x60918c204f3c94630d3d793738fc36293c8405d6', transistor: '0x0f7e9ed401fe35010ebc4d021a204ba031a23194', priceWei: '1000000000000', minted: '16511', cap: '1000000000000', circuits: '1022', note: 'cheapest proven fab' },
+    { name: 'FAB-Genisis', address: '0x87bfca3494aa228ff589ab9b642143a5e8c8f9a6', transistor: '0xbe6f94115d32f3ac3252bc4626573e739beeb714', priceWei: '500000000000000', minted: '1000000', cap: '1000000', circuits: '7164', note: 'most circuits' },
+    { name: 'TAPELIQUID', address: '0x69f663931209096037474d7c20402232e5c762ca', transistor: '0x3fa393d3081accff9e7989619b688235f6d3ee3f', priceWei: '660000000000000', minted: '2100000', cap: '2100000', circuits: '1408', note: 'median price' },
+    { name: 'XBOT', address: '0xa5fc69Ca2D3d462CCa204D894D85ac8071c4F0f0', transistor: '0x7bE7280e31984d18f62218519985EC5DcCa751De', priceWei: '9000000000000000', minted: '40', cap: '1000000000', circuits: '5', note: 'consensus-circuit processor' },
+    { name: 'ViperX', address: '0xb57b56034e2dc25161e2512CfC40b24EA3bee1Fb', transistor: '0xfce5366485140045e95ebdba88ad775fc4aad79f', priceWei: '0', minted: '158', cap: '158', circuits: '4', note: 'free, sold out' },
+    { name: 'Cheapest available', address: '0x99081e1d0ce916cd5b2c53e769dfc3b000bfe9a4', transistor: '0x80a7eb72bc4e559c47304efe6a0f6e73717df5cb', priceWei: '1', minted: '281', cap: '1000000000000000000000000', circuits: '19', note: '1 wei / transistor' }
   ];
-  processors.forEach(function (p) { p.priceOkb = Number(BigInt(p.priceWei)) / 1e18; });
+  // Protocol-wide fee constants, verified live on X Layer (audit §3).
+  // Same on 9898, FAB-Genisis and XBOT; used as the snapshot values until a
+  // live refresh replaces them. The old hardcoded 0.0066 OKB
+  // "processor-opening fee" was stale and wrong — the live deployFee is
+  // 10,000,000 wei = 0.00000000001 OKB.
+  var liveFees = {
+    protocolFeeWei: 660000000000000n,   // 0.00066 OKB, once per mint call
+    tapeoutFeeWei: 1300000000000000n,   // 0.0013 OKB
+    deployFeeWei: 10000000n             // 0.00000000001 OKB
+  };
   var dataLive = false, liveBlock = null, liveAt = null;
   var selectedProc = 0; // index into processors
 
@@ -800,14 +1162,25 @@ footer p { margin: 0; }
   var state = {
     circuit: null, layout: { gates: {}, inputs: {}, outputs: {} },
     inputValues: {}, counters: { gate: 0, input: 0, output: 0 },
-    templateId: null, circuitName: 'Custom circuit'
+    templateId: null, circuitName: 'Custom circuit',
+    // Revision counter: incremented on EVERY circuit mutation (commit,
+    // restore, loadTemplate, Clear). Verify results and pending wires are
+    // stamped with the revision they belong to; a mismatch means stale.
+    revision: 0,
+    // Expected function preserved across compatible edits (audit §2 High).
+    // Set when a template loads; kept while the pin interface (input/output
+    // ids, in order) is unchanged; dropped with a flag when it changes.
+    // Renaming a pin does NOT change its id, so a rename keeps the function.
+    expectedFn: null, expectedSig: null, expectedTemplateId: null,
+    expectedDropped: false
   };
   var history = [], redoStack = [];
   var pendingWire = null; // {k:'i'|'g', id} source ref waiting for a target
+  var pendingWireRev = null; // state.revision when the wire started
   var selected = null;    // {kind:'gate'|'input'|'output', id}
   var drag = null;        // {id, dx, dy, moved}
   var mousePos = null;    // svg coords while a wire is pending
-  var lastVerify = null;
+  var lastVerify = null;  // {result, revision, snapshot}
   var zoomMode = 'fit'; // 'fit' = fit the whole circuit in view, or a number = manual zoom level
   function computeFitZoom(size) {
     var cs = $('canvas-scroll');
@@ -833,18 +1206,58 @@ footer p { margin: 0; }
   var svg = document.getElementById('canvas');
   var $ = function (id) { return document.getElementById(id); };
 
+  function bumpRevision() { state.revision++; }
+  function circuitSnapshot() { return JSON.stringify(state.circuit); }
+  function currentSig() {
+    return {
+      inputIds: state.circuit.inputs.map(function (p) { return p.id; }),
+      outputIds: state.circuit.outputs.map(function (o) { return o.id; })
+    };
+  }
+  // Drop the preserved expected function when the pin interface changed.
+  // Called from renderAll so every mutation path is covered (addGate,
+  // addPin, deleteSelected, deleteWire, completeWire, loadTemplate, Clear,
+  // undo/redo, renamePin, input toggles).
+  function checkExpectedSig() {
+    if (!state.expectedFn) return;
+    var sig = currentSig();
+    var same = state.expectedSig &&
+      sig.inputIds.join(',') === state.expectedSig.inputIds.join(',') &&
+      sig.outputIds.join(',') === state.expectedSig.outputIds.join(',');
+    if (!same) {
+      state.expectedFn = null;
+      state.expectedSig = null;
+      state.expectedTemplateId = null;
+      state.expectedDropped = true;
+    }
+  }
+
   function snapshot() {
     return JSON.parse(JSON.stringify({
       circuit: state.circuit, layout: state.layout, inputValues: state.inputValues,
-      counters: state.counters, templateId: state.templateId, circuitName: state.circuitName
+      counters: state.counters, templateId: state.templateId, circuitName: state.circuitName,
+      expectedSig: state.expectedSig, expectedTemplateId: state.expectedTemplateId,
+      expectedDropped: state.expectedDropped
     }));
   }
   function restore(s) {
     state.circuit = s.circuit; state.layout = s.layout; state.inputValues = s.inputValues;
     state.counters = s.counters; state.templateId = s.templateId; state.circuitName = s.circuitName;
-    pendingWire = null; selected = null;
+    state.expectedSig = s.expectedSig || null;
+    state.expectedTemplateId = s.expectedTemplateId || null;
+    state.expectedDropped = !!s.expectedDropped;
+    // Re-derive the function from the template id (functions cannot be
+    // JSON-serialised into history). If the restored circuit is the template
+    // (or a compatible edit of it), its expected function comes back with it.
+    state.expectedFn = null;
+    if (state.expectedTemplateId) {
+      var tpl = TF.TEMPLATES.find(function (t) { return t.id === state.expectedTemplateId; });
+      if (tpl) state.expectedFn = tpl.expected;
+    }
+    cancelTransient();
+    bumpRevision();
   }
-  function commit() { history.push(snapshot()); if (history.length > 60) history.shift(); redoStack = []; }
+  function commit() { history.push(snapshot()); if (history.length > 60) history.shift(); redoStack = []; bumpRevision(); }
   function undo() {
     if (!history.length) return;
     redoStack.push(snapshot()); restore(history.pop()); renderAll();
@@ -852,6 +1265,17 @@ footer p { margin: 0; }
   function redo() {
     if (!redoStack.length) return;
     history.push(snapshot()); restore(redoStack.pop()); renderAll();
+  }
+
+  // Cancel all transient editor state (audit §5 High): a pending wire, a
+  // selection, a drag, the mouse position, and the pin-click timer. Called
+  // whenever the circuit is replaced or restored, so no stale action can
+  // land on a different circuit.
+  var clickTimer = null, clickTarget = null;
+  function cancelTransient() {
+    pendingWire = null; pendingWireRev = null;
+    selected = null; drag = null; mousePos = null;
+    if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; clickTarget = null; }
   }
 
   // ------------------------------------------------------------ layout
@@ -924,7 +1348,20 @@ footer p { margin: 0; }
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
+  function fmtBig(v) { return BigInt(v).toLocaleString('en-US'); }
+  function fmtSupply(v) {
+    var b = BigInt(v);
+    return b >= 1000000000000000n ? Number(b).toExponential(0) : fmtBig(v);
+  }
   function renderAll() {
+    checkExpectedSig();
+    // Stale verify results (audit §2 High): a result belongs to the exact
+    // revision + circuit structure it was run on. Any mutation clears it.
+    if (lastVerify && (lastVerify.revision !== state.revision || lastVerify.snapshot !== circuitSnapshot())) {
+      lastVerify = null;
+      $('verify-summary').innerHTML = 'Press <b>Verify circuit</b> to run it.';
+      $('verify-table-wrap').innerHTML = '';
+    }
     renderTemplates();
     renderCanvas();
     updateLive();
@@ -1043,40 +1480,56 @@ footer p { margin: 0; }
     var sim = TF.simulate(c, c.inputs.map(function (p) { return state.inputValues[p.id] || 0; }));
     var el = $('live-status');
     var parts = ['<span class="ok">' + c.gates.length + ' gates · ' + c.inputs.length + ' inputs · ' + c.outputs.length + ' outputs</span>'];
-    if (sim.error) parts.push('<span class="err">⚠ ' + esc(sim.error) + '</span>');
-    else {
-      if (sim.warnings.unconnected) parts.push('<span class="warn">⚠ ' + sim.warnings.unconnected + ' gate input(s) unconnected (read as 0)</span>');
-      if (sim.warnings.unwiredOutputs) parts.push('<span class="warn">⚠ ' + sim.warnings.unwiredOutputs + ' output(s) unwired</span>');
-      if (!sim.warnings.unconnected && !sim.warnings.unwiredOutputs) parts.push('<span class="ok">live simulation OK</span>');
+    if (sim.error) {
+      // A compile error (dangling reference, loop, duplicate id) is the
+      // status — never "live simulation OK" on a broken circuit (§2/§5).
+      parts.push('<span class="err">⚠ ' + esc(sim.error) + '</span>');
+    } else {
+      // Count unconnected ports INDIVIDUALLY (§1 Low) and unwired outputs
+      // from the compile warnings carried by TF.simulate.
+      var ups = sim.warnings.unconnectedPorts || [];
+      var unw = sim.warnings.unwiredOutputs || [];
+      if (ups.length) parts.push('<span class="warn">⚠ ' + ups.length + ' gate input(s) unconnected (read as 0)</span>');
+      if (unw.length) parts.push('<span class="warn">⚠ ' + unw.length + ' output(s) unwired</span>');
+      if (!ups.length && !unw.length) parts.push('<span class="ok">live simulation OK</span>');
     }
     el.innerHTML = parts.join(' &nbsp;·&nbsp; ');
   }
 
   // ------------------------------------------------------------ verify UI
   function runVerify() {
-    var tpl = state.templateId ? TF.TEMPLATES.find(function (t) { return t.id === state.templateId; }) : null;
-    var expectedFn = tpl ? tpl.expected : null;
+    var expectedFn = state.expectedFn || null;
     var t0 = Date.now();
     var r = TF.verifyCircuit(state.circuit, expectedFn);
-    lastVerify = r;
+    lastVerify = { result: r, revision: state.revision, snapshot: circuitSnapshot() };
     var box = $('verify-summary'), wrap = $('verify-table-wrap');
     if (r.error) {
+      // A structural error is never a pass count (§2 High): no "8/8 pass"
+      // for a disconnected output, no "1/1 pass" for an empty canvas.
       box.innerHTML = '<span class="fail">Cannot verify: ' + esc(r.error) + '</span>';
       wrap.innerHTML = '';
       return;
     }
-    var head = r.failed === 0
-      ? '<span class="pass">✓ ' + r.passed.toLocaleString() + '/' + r.total.toLocaleString() + ' cases pass</span>'
-      : '<span class="fail">✗ ' + r.passed.toLocaleString() + '/' + r.total.toLocaleString() + ' pass — ' + r.failed.toLocaleString() + ' fail</span>';
-    head += ' <span style="color:var(--muted)">(' + (r.sampled ? 'sampled, deterministic' : 'exhaustive') + ', ' + (Date.now() - t0) + ' ms)</span>';
-    if (!expectedFn) head += '<br><span style="color:var(--muted)">No expected function for a custom circuit — showing simulated outputs only (structural checks: no loops, ' + r.unconnected + ' unconnected inputs, ' + r.unwiredOutputs + ' unwired outputs).</span>';
+    var head;
+    if (!r.hasExpected) {
+      head = '<span class="ok">Simulated, no expected function — ' + r.total.toLocaleString() + ' cases simulated</span>' +
+        ' <span style="color:var(--muted)">(' + (r.sampled ? 'sampled, deterministic' : 'exhaustive') + ', ' + r.gateCount + ' encoded gates' + (r.buffers ? ', incl. ' + r.buffers + ' buffer NANDs' : '') + ', ' + (Date.now() - t0) + ' ms)</span>';
+      if (state.expectedDropped) head += '<br><span class="warn">Pin interface changed — the expected function no longer applies.</span>';
+    } else {
+      head = r.failed === 0
+        ? '<span class="pass">✓ ' + r.passed.toLocaleString() + '/' + r.total.toLocaleString() + ' cases pass</span>'
+        : '<span class="fail">✗ ' + r.passed.toLocaleString() + '/' + r.total.toLocaleString() + ' pass — ' + r.failed.toLocaleString() + ' fail</span>';
+      head += ' <span style="color:var(--muted)">(' + (r.sampled ? 'sampled, deterministic' : 'exhaustive') + ', ' + r.gateCount + ' encoded gates' + (r.buffers ? ', incl. ' + r.buffers + ' buffer NANDs' : '') + ', ' + (Date.now() - t0) + ' ms)</span>';
+    }
     box.innerHTML = head;
 
     // Truth table: failures first, then the first passing cases (max 40 rows).
     var c = state.circuit;
     var rows = [];
     function rowFor(bits) {
-      var got = TF.simulate(c, bits).outputs;
+      var s2 = TF.simulate(c, bits);
+      if (!s2 || s2.error) return null;
+      var got = s2.outputs;
       var exp = expectedFn ? expectedFn(bits) : null;
       var ok = !exp || got.every(function (v, i) { return v === exp[i]; });
       return { bits: bits, got: got, exp: exp, ok: ok };
@@ -1087,10 +1540,14 @@ footer p { margin: 0; }
       for (var cs = 0; cs < Math.min(need, r.total); cs++) {
         var bits = c.inputs.map(function (_, i) { return (cs >> i) & 1; });
         var row = rowFor(bits);
-        if (row.ok) rows.push(row);
+        if (row && row.ok) rows.push(row);
       }
     }
-    if (!rows.length) { wrap.innerHTML = '<p class="panel-note">No rows to show.</p>'; return; }
+    if (!rows.length) {
+      // Never claim "No rows to show" for a sampled run that retained none.
+      wrap.innerHTML = '<p class="panel-note">' + (r.sampled ? 'Sampled run — no rows retained.' : 'No rows to show.') + '</p>';
+      return;
+    }
     var h = '<table><thead><tr>' +
       c.inputs.map(function (p) { return '<th class="mono">' + esc(p.name) + '</th>'; }).join('') +
       c.outputs.map(function (o) { return '<th class="mono">' + esc(o.name) + '</th>'; }).join('') +
@@ -1103,140 +1560,299 @@ footer p { margin: 0; }
         (expectedFn ? '<td class="' + (row.ok ? 'pass' : 'fail') + '">' + (row.ok ? '✓' : '✗ FAIL') + '</td>' : '') + '</tr>';
     });
     h += '</tbody></table>';
-    if (r.total > rows.length) h += '<p class="panel-note">Showing ' + rows.length + ' of ' + r.total.toLocaleString() + ' cases' + (r.failed ? ' (all ' + r.failed + ' failures shown first)' : ' (first cases)') + '.</p>';
+    // Label exactly what is shown (§2 Low): never claim all failures are
+    // shown when the verifier retains at most 20 of them.
+    var note;
+    if (r.sampled) {
+      note = 'Showing ' + rows.length + ' sampled cases of ' + r.total.toLocaleString();
+      if (r.hasExpected && r.failed) note += ' (' + Math.min(r.failed, 20) + ' of ' + r.failed + ' failures shown first)';
+      note += '.';
+    } else {
+      note = 'Showing ' + rows.length + ' of ' + r.total.toLocaleString() + ' cases';
+      if (r.hasExpected && r.failed) note += r.failed <= 20 ? ' (all ' + r.failed + ' failures shown first)' : ' (first 20 of ' + r.failed + ' failures shown first)';
+      else if (!r.hasExpected) note += ' (simulated outputs only)';
+      else note += ' (first cases)';
+      note += '.';
+    }
+    h += '<p class="panel-note">' + note + '</p>';
     wrap.innerHTML = h;
   }
 
   // ------------------------------------------------------------ cost UI
-  function cheapestAvailable() {
+  // The quote counts the gates in the FINAL ENCODED circuit (including the
+  // 2-NAND output buffers), never the editor gate count (§3 High).
+  function encodedForCost() {
+    var enc = TF.encodePayload(state.circuit);
+    if (enc.error) return { error: enc.error };
+    return { error: null, gates: enc.nGates, buffers: enc.buffers, bufferOutputs: enc.bufferOutputs };
+  }
+  // Cheapest among the six listed processors that can actually fill the
+  // order: remaining supply (cap - minted, BigInt) must cover the encoded
+  // gate count. best === null (not !best) so row 0 can win (§3 Medium).
+  function cheapestAvailable(gates) {
     var best = null;
     processors.forEach(function (p, i) {
-      if (p.minted < p.cap && (!best || p.priceOkb < processors[best].priceOkb)) best = i;
+      var remaining = BigInt(p.cap) - BigInt(p.minted);
+      if (remaining >= BigInt(gates) && (best === null || BigInt(p.priceWei) < BigInt(processors[best].priceWei))) best = i;
     });
     return best;
   }
   function renderCost() {
-    var cheapest = cheapestAvailable();
+    var enc = encodedForCost();
+    var cheapest = enc.error ? null : cheapestAvailable(enc.gates);
     $('processor-body').innerHTML = processors.map(function (p, i) {
-      var soldOut = p.minted >= p.cap;
+      var soldOut = BigInt(p.minted) >= BigInt(p.cap);
+      var remaining = BigInt(p.cap) - BigInt(p.minted);
+      var canFill = !enc.error && remaining >= BigInt(enc.gates);
       var tags = '';
       if (i === cheapest) tags += '<span class="tag cheapest">cheapest</span>';
-      if (p.circuits >= 1000 && !soldOut) tags += '<span class="tag">proven fab</span>';
+      if (BigInt(p.circuits) >= 1000n && !soldOut) tags += '<span class="tag">proven fab</span>';
       if (soldOut) tags += '<span class="tag soldout">sold out</span>';
+      else if (!enc.error && !canFill) tags += '<span class="tag soldout">unavailable</span>';
       return '<tr data-proc="' + i + '" class="' + (i === selectedProc ? 'selected' : '') + '">' +
         '<td><b>' + esc(p.name) + '</b>' + tags + '<br><span style="color:var(--muted)">' + esc(p.note) + '</span><br>' +
         '<span class="mono" style="color:var(--muted);font-size:10px">' + p.address.slice(0, 10) + '…' + p.address.slice(-6) + '</span></td>' +
-        '<td class="mono">' + TF.formatOkb(p.priceOkb) + ' OKB</td>' +
-        '<td class="mono">' + p.circuits.toLocaleString() + '</td>' +
-        '<td class="mono">' + p.minted.toLocaleString() + ' / ' + (p.cap >= 1e15 ? p.cap.toExponential(0) : p.cap.toLocaleString()) + '</td></tr>';
+        '<td class="mono">' + TF.formatWei(BigInt(p.priceWei)) + ' OKB</td>' +
+        '<td class="mono">' + fmtBig(p.circuits) + '</td>' +
+        '<td class="mono">' + fmtBig(p.minted) + ' / ' + fmtSupply(p.cap) + '</td></tr>';
     }).join('');
+    // Deploy-fee checkbox label shows the LIVE deployFee — never a hardcoded
+    // value (§3 High: the old 0.0066 OKB was stale and wrong).
+    var lbl = $('lbl-open-fee-text');
+    if (lbl) lbl.textContent = 'Include processor-opening fee (' + TF.formatWei(liveFees.deployFeeWei) + ' OKB) — only if you open your own processor';
     var p = processors[selectedProc];
-    var gates = state.circuit.gates.length;
-    var est = TF.costEstimate(gates, p.priceOkb);
-    var openFee = $('chk-open-fee').checked ? TF.PROCESSOR_OPEN_FEE_OKB : 0;
-    var total = est.total + openFee;
-    var usd = total * OKB_USD;
-    $('cost-breakdown').innerHTML =
-      '<div class="row"><span>Processor</span><span class="num">' + esc(p.name) + '</span></div>' +
-      '<div class="row"><span>Transistors (1 per gate)</span><span class="num">' + gates + ' × ' + TF.formatOkb(p.priceOkb) + ' OKB</span></div>' +
-      '<div class="row"><span>Transistor cost</span><span class="num">' + TF.formatOkb(est.transistorCost) + ' OKB</span></div>' +
-      '<div class="row"><span>Tape-out fee</span><span class="num">' + TF.formatOkb(est.tapeoutFee) + ' OKB</span></div>' +
-      (openFee ? '<div class="row"><span>Processor-opening fee</span><span class="num">' + TF.formatOkb(openFee) + ' OKB</span></div>' : '') +
-      '<div class="row total"><span>Estimated total</span><span>' + TF.formatOkb(total) + ' OKB ≈ $' + usd.toFixed(2) + '</span></div>';
+    var box = $('cost-breakdown');
+    if (enc.error) {
+      // No quote at all for a circuit that cannot be encoded (§3 High).
+      box.innerHTML = '<div class="row"><span>No quote</span><span class="num">' + esc(enc.error) + '</span></div>' +
+        '<p class="panel-note">Fix the circuit above (wire every gate input and output) to get a tape-out quote.</p>';
+    } else {
+      var remaining = BigInt(p.cap) - BigInt(p.minted);
+      var soldOut = BigInt(p.minted) >= BigInt(p.cap);
+      if (remaining < BigInt(enc.gates)) {
+        // A processor that cannot fill the order gets no normal quote.
+        box.innerHTML = '<div class="row"><span>Processor</span><span class="num">' + esc(p.name) + '</span></div>' +
+          '<div class="row"><span>Status</span><span class="num">' + (soldOut ? 'unavailable (sold out)' : 'unavailable — only ' + fmtBig(remaining) + ' transistor(s) left, need ' + enc.gates) + '</span></div>' +
+          '<p class="panel-note">This processor cannot fill a ' + enc.gates + '-gate order. Pick another processor above.</p>';
+      } else {
+        var includeDeploy = $('chk-open-fee').checked;
+        var est = TF.costEstimate(enc.gates, {
+          mintPriceWei: BigInt(p.priceWei),
+          protocolFeeWei: liveFees.protocolFeeWei,
+          tapeoutFeeWei: liveFees.tapeoutFeeWei,
+          deployFeeWei: includeDeploy ? liveFees.deployFeeWei : 0n
+        });
+        var usd = Number(est.totalWei) / 1e18 * OKB_USD;
+        box.innerHTML =
+          '<div class="row"><span>Processor</span><span class="num">' + esc(p.name) + '</span></div>' +
+          '<div class="row"><span>Transistors (1 per gate, encoded circuit)</span><span class="num">' + enc.gates + ' × ' + TF.formatWei(BigInt(p.priceWei)) + ' OKB</span></div>' +
+          '<div class="row"><span>Transistor cost</span><span class="num">' + TF.formatWei(est.transistorCostWei) + ' OKB</span></div>' +
+          '<div class="row"><span>Protocol fee (once per mint)</span><span class="num">' + TF.formatWei(est.protocolFeeWei) + ' OKB</span></div>' +
+          '<div class="row"><span>Tape-out fee</span><span class="num">' + TF.formatWei(est.tapeoutFeeWei) + ' OKB</span></div>' +
+          (includeDeploy ? '<div class="row"><span>Processor-opening fee</span><span class="num">' + TF.formatWei(est.deployFeeWei) + ' OKB</span></div>' : '') +
+          '<div class="row total"><span>Estimated total</span><span>' + TF.formatWei(est.totalWei) + ' OKB ≈ $' + usd.toFixed(2) + '</span></div>' +
+          (enc.buffers ? '<p class="panel-note">Includes ' + enc.buffers + ' buffer NAND(s) so the outputs land in the final signal positions' + (enc.bufferOutputs.length ? ' (' + enc.bufferOutputs.map(esc).join(', ') + ')' : '') + '.</p>' : '');
+      }
+    }
     var src = $('data-source');
     var label = dataLive
       ? '<b class="live">LIVE</b> from X Layer RPC · block ' + liveBlock + ' · ' + liveAt
       : '<b>cached snapshot</b> · <span id="snapshot-date">' + SNAPSHOT_AT + '</span>';
-    src.innerHTML = 'Data: ' + label + ' · <button id="btn-refresh" class="small">↻ Refresh live</button> <span id="refresh-status"></span>';
-    $('btn-refresh').addEventListener('click', refreshLive);
+    src.innerHTML = 'Data: ' + label + ' · <button id="btn-refresh" class="small">↻ Refresh live</button> <span id="refresh-status">' + esc(refreshStatus) + '</span>';
+    var rb = $('btn-refresh');
+    rb.addEventListener('click', refreshLive);
+    rb.disabled = refreshInFlight;
   }
+
+  // ------------------------------------------------------------ export UI
+  // The tape-out deliverable is the PROTOCOL BYTES from TF.exportTapeout —
+  // the single shared validation for both Download and Copy (§4 Critical).
+  // The text netlist is a DRAFT preview only and stays available even for
+  // an invalid circuit.
   function renderNetlist() {
-    $('netlist-view').textContent = TF.exportNetlist(state.circuit, state.circuitName);
+    var exp = TF.exportTapeout(state.circuit);
+    var statusEl = $('export-status');
+    var hexEl = $('payload-hex');
+    var dl = $('btn-download'), cp = $('btn-copy');
+    if (exp.error) {
+      statusEl.innerHTML = '<span class="fail">Not tape-out ready: ' + esc(exp.error) + '</span>';
+      hexEl.textContent = '— no payload (blocked: see above)';
+      dl.disabled = true; cp.disabled = true;
+    } else {
+      statusEl.innerHTML = '<span class="pass">✓ Tape-out ready</span> — ' + exp.nGates + ' gates encoded' +
+        (exp.buffers ? ' (incl. ' + exp.buffers + ' buffer NANDs for ' + exp.bufferOutputs.map(esc).join(', ') + ')' : '') +
+        ', payload ' + exp.bytes.length + ' bytes';
+      var hex = exp.hex;
+      hexEl.textContent = hex.length > 160
+        ? hex.slice(0, 160) + '… (' + exp.bytes.length + ' bytes, ' + hex.length + ' hex chars total)'
+        : hex;
+      dl.disabled = false; cp.disabled = false;
+    }
+    $('netlist-view').textContent = TF.exportNetlistDraft(state.circuit, state.circuitName);
   }
 
   // ------------------------------------------------------------ live RPC
+  // Audit §5: pin a block FIRST, then make ALL eth_calls at that block;
+  // resolve token addresses at that block before pricing them; decode
+  // validated 32-byte words DIRECTLY with BigInt (no parseInt on wei
+  // values); require exactly one successful response per requested id;
+  // stage a complete new result and publish ONLY after the whole quote
+  // validates; retry the WHOLE read on the second RPC endpoint; never
+  // publish a partial read and never present a failed read as live data.
+  var refreshSeq = 0, refreshInFlight = false, refreshStatus = '';
   function rpcCall(url, payload) {
     return fetch(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload), signal: AbortSignal.timeout(20000)
     }).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
   }
-  function word(h, i) {
-    i = i || 0;
-    if (!h || typeof h !== 'string') return 0;
-    return parseInt(h.slice(2 + i * 64, 2 + i * 64 + 64) || '0', 16);
+  function isWord(h) { return typeof h === 'string' && /^0x[0-9a-fA-F]{64}$/.test(h); }
+  function wordBigInt(h) {
+    if (!isWord(h)) throw new Error('malformed 32-byte word: ' + String(h));
+    return BigInt(h);
   }
-  function addr(h) { return h ? '0x' + h.slice(26, 66) : '0x' + '0'.repeat(40); }
-  function batch(url, pairs) {
-    // pairs: [[to, data], ...] — max 10 per batch (public RPC limit)
+  function wordAddr(h) {
+    if (!isWord(h)) throw new Error('malformed 32-byte word: ' + String(h));
+    return '0x' + h.slice(26).toLowerCase();
+  }
+  function batch(url, pairs, blockHex) {
+    // pairs: [[to, data], ...] — max 10 per batch (public RPC limit).
+    // Every response must be present exactly once, error-free, and a
+    // validated 32-byte word, or the WHOLE batch (and the whole refresh) fails.
     var out = [];
     var chain = Promise.resolve();
     for (var i = 0; i < pairs.length; i += 10) {
       (function (part) {
         chain = chain.then(function () {
           return rpcCall(url, part.map(function (p, k) {
-            return { jsonrpc: '2.0', id: k, method: 'eth_call', params: [{ to: p[0], data: p[1] }, 'latest'] };
+            return { jsonrpc: '2.0', id: k, method: 'eth_call', params: [{ to: p[0], data: p[1] }, blockHex] };
           })).then(function (res) {
+            var arr = Array.isArray(res) ? res : [res];
+            if (arr.length !== part.length) throw new Error('batch returned ' + arr.length + ' results for ' + part.length + ' requests');
             var byId = {};
-            (Array.isArray(res) ? res : [res]).forEach(function (o) { byId[o.id] = o.result; });
-            part.forEach(function (_, k) { out.push(byId[k]); });
+            arr.forEach(function (o) {
+              if (!o || o.error) throw new Error('JSON-RPC error for id ' + (o && o.id) + ': ' + JSON.stringify(o && o.error));
+              if (byId[o.id] !== undefined) throw new Error('duplicate response id ' + o.id);
+              if (!isWord(o.result)) throw new Error('malformed result for id ' + o.id + ': ' + String(o.result));
+              byId[o.id] = o.result;
+            });
+            part.forEach(function (_, k) {
+              if (byId[k] === undefined) throw new Error('missing response for id ' + k);
+              out.push(byId[k]);
+            });
           });
         }).then(function () { return new Promise(function (r) { setTimeout(r, 250); }); });
       })(pairs.slice(i, i + 10));
     }
     return chain.then(function () { return out; });
   }
+  function tryRead(url) {
+    var blockHex, blockNum;
+    return rpcCall(url, { jsonrpc: '2.0', id: 0, method: 'eth_chainId', params: [] }).then(function (r) {
+      if (!r || r.error || r.result !== '0xc4') throw new Error('chainId is not 0xc4 (X Layer)');
+      return rpcCall(url, { jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] });
+    }).then(function (r) {
+      if (!r || r.error || typeof r.result !== 'string' || !/^0x[0-9a-fA-F]+$/.test(r.result)) throw new Error('bad block number');
+      blockHex = r.result; blockNum = BigInt(r.result);
+      // Round 1: each processor's token address + circuit count, at the block.
+      var pairs1 = [];
+      processors.forEach(function (p) {
+        pairs1.push([p.address, SEL.transistors]);
+        pairs1.push([p.address, SEL.nextId]);
+      });
+      return batch(url, pairs1, blockHex);
+    }).then(function (res1) {
+      var staged = processors.map(function (p, i) {
+        var token = wordAddr(res1[i * 2]);
+        if (token === '0x0000000000000000000000000000000000000000') throw new Error('processor ' + p.name + ' has no transistor token at the pinned block');
+        return {
+          name: p.name, address: p.address, transistor: token,
+          priceWei: p.priceWei, minted: p.minted, cap: p.cap,
+          circuits: wordBigInt(res1[i * 2 + 1]).toString(), note: p.note
+        };
+      });
+      // Round 2: using the RESOLVED token addresses — price/minted/cap/
+      // protocolFee on the token, TAPEOUT_FEE on the processor, deployFee
+      // on the factory — all at the same pinned block.
+      var pairs2 = [];
+      staged.forEach(function (p) {
+        pairs2.push([p.transistor, SEL.price]);
+        pairs2.push([p.transistor, SEL.minted]);
+        pairs2.push([p.transistor, SEL.cap]);
+        pairs2.push([p.transistor, SEL.protocolFee]);
+      });
+      staged.forEach(function (p) { pairs2.push([p.address, SEL.tapeoutFee]); });
+      pairs2.push([FACTORY, SEL.deployFee]);
+      return batch(url, pairs2, blockHex).then(function (res2) {
+        var n = staged.length, protocolFee = null, tapeoutFee = null;
+        staged.forEach(function (p, i) {
+          var b = i * 4;
+          p.priceWei = wordBigInt(res2[b]).toString();
+          p.minted = wordBigInt(res2[b + 1]).toString();
+          p.cap = wordBigInt(res2[b + 2]).toString();
+          var pf = wordBigInt(res2[b + 3]);
+          if (protocolFee === null) protocolFee = pf;
+          else if (protocolFee !== pf) throw new Error('protocolFee differs between processors');
+        });
+        for (var k = 0; k < n; k++) {
+          var tf = wordBigInt(res2[n * 4 + k]);
+          if (tapeoutFee === null) tapeoutFee = tf;
+          else if (tapeoutFee !== tf) throw new Error('TAPEOUT_FEE differs between processors');
+        }
+        var deployFee = wordBigInt(res2[n * 4 + n]);
+        return {
+          processors: staged,
+          fees: { protocolFeeWei: protocolFee, tapeoutFeeWei: tapeoutFee, deployFeeWei: deployFee },
+          block: blockNum, blockHex: blockHex
+        };
+      });
+    });
+  }
   function refreshLive() {
-    var status = $('refresh-status');
-    if (status) status.textContent = 'reading…';
+    if (refreshInFlight) return Promise.resolve(false); // no overlapping refreshes
+    refreshInFlight = true;
+    var mySeq = ++refreshSeq;
+    refreshStatus = 'reading…';
+    renderCost();
     var chain = Promise.resolve(null);
     RPCS.forEach(function (url) {
       chain = chain.then(function (found) {
         if (found) return found;
-        return rpcCall(url, { jsonrpc: '2.0', id: 0, method: 'eth_chainId', params: [] })
-          .then(function (r) { return r.result === '0xc4' ? url : null; })
-          .catch(function () { return null; });
+        return tryRead(url).catch(function () { return null; }); // whole-read retry on the next endpoint
       });
     });
-    chain.then(function (url) {
-      if (!url) throw new Error('no X Layer RPC reachable (tried ' + RPCS.join(', ') + ')');
-      var pairs = [];
-      processors.forEach(function (p) {
-        pairs.push([p.address, SEL.transistors]);
-        pairs.push([p.transistor, SEL.price]);
-        pairs.push([p.address, SEL.nextId]);
-        pairs.push([p.transistor, SEL.minted]);
-        pairs.push([p.transistor, SEL.cap]);
-      });
-      return batch(url, pairs).then(function (res) {
-        return rpcCall(url, { jsonrpc: '2.0', id: 0, method: 'eth_blockNumber', params: [] })
-          .then(function (b) { return { url: url, res: res, block: parseInt(b.result, 16) }; });
-      });
-    }).then(function (done) {
-      processors.forEach(function (p, i) {
-        var r = done.res.slice(i * 5, i * 5 + 5);
-        var token = addr(r[0]);
-        var priceWei = String(word(r[1]));
-        var circuits = word(r[2]);
-        var minted = word(r[3]);
-        var cap = word(r[4]);
-        if (token !== '0x0000000000000000000000000000000000000000') p.transistor = token;
-        p.priceWei = priceWei;
-        p.priceOkb = Number(BigInt(priceWei)) / 1e18;
-        p.circuits = circuits; p.minted = minted; p.cap = cap;
-      });
-      dataLive = true; liveBlock = done.block.toLocaleString();
+    return chain.then(function (found) {
+      refreshInFlight = false;
+      if (mySeq !== refreshSeq) return false; // superseded — never publish a stale refresh
+      if (!found) {
+        // Keep the previous data and say what it actually is: never claim
+        // "snapshot" while retaining live values, or vice versa.
+        refreshStatus = 'live read failed — keeping ' + (dataLive ? 'live data (block ' + liveBlock + ')' : 'cached snapshot (' + SNAPSHOT_AT + ')');
+        renderCost();
+        return false;
+      }
+      // Publish the complete staged result only now that it all validated.
+      processors = found.processors;
+      liveFees = found.fees;
+      dataLive = true;
+      liveBlock = found.block.toLocaleString('en-US');
       liveAt = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+      refreshStatus = '';
       renderCost();
+      return true;
     }).catch(function (e) {
-      var s2 = $('refresh-status');
-      if (s2) s2.textContent = 'live read failed (' + e.message + ') — showing snapshot';
+      refreshInFlight = false;
+      refreshStatus = 'live read failed (' + e.message + ') — keeping ' + (dataLive ? 'live data (block ' + liveBlock + ')' : 'cached snapshot');
+      renderCost();
+      return false;
     });
   }
 
   // ------------------------------------------------------------ actions
   function loadTemplate(tpl) {
+    cancelTransient();
     if (state.circuit) commit(); // no history entry for the very first load
+    bumpRevision();
     state.circuit = tpl.build();
     state.layout = autoLayout(state.circuit);
     state.inputValues = {};
@@ -1244,6 +1860,11 @@ footer p { margin: 0; }
     state.counters = { gate: state.circuit.gates.length, input: state.circuit.inputs.length, output: state.circuit.outputs.length };
     state.templateId = tpl.id;
     state.circuitName = tpl.name;
+    // Preserve the template's expected function + pin signature (§2 High).
+    state.expectedFn = tpl.expected;
+    state.expectedSig = currentSig();
+    state.expectedTemplateId = tpl.id;
+    state.expectedDropped = false;
     lastVerify = null;
     $('verify-summary').innerHTML = 'Press <b>Verify circuit</b> to run it.';
     $('verify-table-wrap').innerHTML = '';
@@ -1265,18 +1886,29 @@ footer p { margin: 0; }
     state.templateId = null; state.circuitName = 'Custom circuit';
     renderAll();
   }
+  // A pin name guaranteed unique across ALL pins (§4 High): loop IN0/IN1/…
+  // (or OUT0/OUT1/…) until a name not already used by any pin is found —
+  // never derive it from the array length (a deleted middle pin would
+  // otherwise be re-used and collide).
+  function uniquePinName(prefix) {
+    var used = {};
+    state.circuit.inputs.concat(state.circuit.outputs).forEach(function (p) { used[p.name] = true; });
+    var i = 0, name;
+    do { name = prefix + i; i++; } while (used[name]);
+    return name;
+  }
   function addPin(kind) {
     commit();
     var c = state.circuit;
     if (kind === 'input') {
       var id = 'in' + (state.counters.input++);
-      var name = 'IN' + c.inputs.length;
+      var name = uniquePinName('IN');
       c.inputs.push({ id: id, name: name });
       state.layout.inputs[id] = { x: 20, y: 30 + (c.inputs.length - 1) * 44 };
       state.inputValues[id] = 0;
     } else {
       var oid = 'out' + (state.counters.output++);
-      var oname = 'OUT' + c.outputs.length;
+      var oname = uniquePinName('OUT');
       c.outputs.push({ id: oid, name: oname, src: null });
       var maxRight = 260;
       Object.values(state.layout.gates).forEach(function (p) { maxRight = Math.max(maxRight, p.x + GATE_W + 60); });
@@ -1287,6 +1919,12 @@ footer p { margin: 0; }
   }
   function deleteSelected() {
     if (!selected) return;
+    // Deleting the source of a pending wire cancels the wire (§5 High).
+    if (pendingWire &&
+      ((pendingWire.k === 'g' && selected.kind === 'gate') || (pendingWire.k === 'i' && selected.kind === 'input')) &&
+      pendingWire.id === selected.id) {
+      pendingWire = null; pendingWireRev = null;
+    }
     commit();
     var c = state.circuit;
     if (selected.kind === 'gate') {
@@ -1330,8 +1968,21 @@ footer p { margin: 0; }
   }
   function completeWire(target) {
     // target: {kind:'gate', id, which:'a'|'b'} or {kind:'output', id}
-    commit();
+    // Refuse a stale wire (§5 High): the revision must be unchanged since
+    // the wire started, and both endpoints must still exist in the CURRENT
+    // circuit — an id that exists in both templates must not let a stale
+    // action target a different, valid node.
+    if (!pendingWire) return;
+    if (pendingWireRev !== state.revision) { pendingWire = null; pendingWireRev = null; renderCanvas(); return; }
     var c = state.circuit;
+    var srcExists = pendingWire.k === 'i'
+      ? c.inputs.some(function (p) { return p.id === pendingWire.id; })
+      : c.gates.some(function (g) { return g.id === pendingWire.id; });
+    var tgtExists = target.kind === 'gate'
+      ? c.gates.some(function (g) { return g.id === target.id; })
+      : c.outputs.some(function (o) { return o.id === target.id; });
+    if (!srcExists || !tgtExists) { pendingWire = null; pendingWireRev = null; renderCanvas(); return; }
+    commit();
     if (target.kind === 'gate') {
       var g = c.gates.find(function (x) { return x.id === target.id; });
       if (g) g[target.which] = { k: pendingWire.k, id: pendingWire.id };
@@ -1339,7 +1990,7 @@ footer p { margin: 0; }
       var o = c.outputs.find(function (x) { return x.id === target.id; });
       if (o) o.src = { k: pendingWire.k, id: pendingWire.id };
     }
-    pendingWire = null;
+    pendingWire = null; pendingWireRev = null;
     state.templateId = null; state.circuitName = 'Custom circuit';
     renderAll();
   }
@@ -1355,8 +2006,11 @@ footer p { margin: 0; }
     if (port) {
       var kind = port.getAttribute('data-kind'), id = port.getAttribute('data-id'), which = port.getAttribute('data-port');
       if (which === 'out') {
-        // source port: start (or switch) a pending wire
+        // source port: start (or switch) a pending wire, stamped with the
+        // current revision so completeWire can refuse it if the circuit
+        // changed meanwhile.
         pendingWire = { k: kind === 'input' ? 'i' : 'g', id: id };
+        pendingWireRev = state.revision;
         mousePos = svgPoint(e);
         renderCanvas();
       } else {
@@ -1398,18 +2052,34 @@ footer p { margin: 0; }
   // Single click on a pin toggles it (input) or selects it (output);
   // a double click renames it. A short timer tells the two apart so a
   // double click does not also toggle the value.
-  var clickTimer = null, clickTarget = null;
+  // Pin-name validation (§4 High): a name is rejected — with an alert
+  // explaining why — if it is empty, looks like a gate name (G0, G1, …),
+  // is "0" or "1", contains anything outside [A-Za-z0-9_], or duplicates
+  // an existing input or output pin name.
+  function validatePinName(name, kind, selfId) {
+    if (name === null || name === undefined || !String(name).trim()) return 'Pin names cannot be empty.';
+    var n = String(name).trim();
+    if (/^G\d+$/.test(n)) return '"' + n + '" looks like a gate name (G0, G1, …) — gate names are reserved for NAND gates.';
+    if (n === '0' || n === '1') return '"' + n + '" is a constant value — pin names cannot be "0" or "1".';
+    if (/[^A-Za-z0-9_]/.test(n)) return 'Pin names may only contain letters, digits and underscore (no spaces or punctuation).';
+    var clash = state.circuit.inputs.concat(state.circuit.outputs).some(function (p) { return p.id !== selfId && p.name === n; });
+    if (clash) return 'Another pin is already named "' + n + '" — pin names must be unique.';
+    return null;
+  }
   function renamePin(kind, id) {
     var list = kind === 'input' ? state.circuit.inputs : state.circuit.outputs;
     var pin = list.find(function (x) { return x.id === id; });
     if (!pin) return;
-    var name = window.prompt('Rename pin "' + pin.name + '" to:', pin.name);
-    if (name && name.trim() && name.trim() !== pin.name) {
-      commit();
-      pin.name = name.trim().replace(/\s+/g, '_').slice(0, 12);
-      state.templateId = null; state.circuitName = 'Custom circuit';
-      renderAll();
-    }
+    var raw = window.prompt('Rename pin "' + pin.name + '" to:', pin.name);
+    if (raw === null || raw === undefined) return; // cancelled
+    var name = String(raw).trim();
+    if (name === pin.name) return;
+    var err = validatePinName(name, kind, id);
+    if (err) { window.alert('Cannot rename pin: ' + err); return; }
+    commit();
+    pin.name = name;
+    state.templateId = null; state.circuitName = 'Custom circuit';
+    renderAll();
   }
   function handlePinClick(kind, id) {
     var key = kind + ':' + id;
@@ -1418,9 +2088,16 @@ footer p { margin: 0; }
       renamePin(kind, id);
       return;
     }
+    var revAtClick = state.revision;
     clickTarget = key;
     clickTimer = setTimeout(function () {
       clickTimer = null; clickTarget = null;
+      // Re-validate before acting (§5 High): the pin must still exist in
+      // the current circuit and the revision must be unchanged, or this
+      // delayed click must do nothing.
+      if (revAtClick !== state.revision) return;
+      var list = kind === 'input' ? state.circuit.inputs : state.circuit.outputs;
+      if (!list.some(function (p) { return p.id === id; })) return;
       if (kind === 'input') {
         commit();
         state.inputValues[id] = state.inputValues[id] ? 0 : 1;
@@ -1449,7 +2126,7 @@ footer p { margin: 0; }
       return;
     }
     // clicked empty canvas: cancel a pending wire / clear selection
-    if (pendingWire) { pendingWire = null; renderCanvas(); }
+    if (pendingWire) { pendingWire = null; pendingWireRev = null; renderCanvas(); }
     else if (selected) { selected = null; renderCanvas(); }
   });
   svg.addEventListener('contextmenu', function (e) {
@@ -1464,7 +2141,7 @@ footer p { margin: 0; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
     else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
     else if (e.key === 'Delete' || e.key === 'Backspace') { if (selected) { e.preventDefault(); deleteSelected(); } }
-    else if (e.key === 'Escape' && pendingWire) { pendingWire = null; renderCanvas(); }
+    else if (e.key === 'Escape' && pendingWire) { pendingWire = null; pendingWireRev = null; renderCanvas(); }
   });
 
   $('template-list').addEventListener('click', function (e) {
@@ -1487,11 +2164,13 @@ footer p { margin: 0; }
   $('btn-delete').addEventListener('click', deleteSelected);
   $('btn-clear').addEventListener('click', function () {
     if (!window.confirm('Clear the whole circuit? (Undo restores it.)')) return;
+    cancelTransient();
     commit();
     state.circuit = { inputs: [], gates: [], outputs: [] };
     state.layout = { gates: {}, inputs: {}, outputs: {} };
     state.inputValues = {};
     state.templateId = null; state.circuitName = 'Custom circuit';
+    state.expectedFn = null; state.expectedSig = null; state.expectedTemplateId = null; state.expectedDropped = false;
     lastVerify = null;
     $('verify-summary').innerHTML = 'Press <b>Verify circuit</b> to run it.';
     $('verify-table-wrap').innerHTML = '';
@@ -1508,20 +2187,23 @@ footer p { margin: 0; }
   });
   $('chk-open-fee').addEventListener('change', renderCost);
   $('btn-download').addEventListener('click', function () {
-    var text = TF.exportNetlist(state.circuit, state.circuitName);
-    var blob = new Blob([text], { type: 'text/plain' });
+    // Shared validation: the protocol bytes, or nothing (§4 High).
+    var exp = TF.exportTapeout(state.circuit);
+    if (exp.error) { window.alert('Cannot export: ' + exp.error); return; }
+    var blob = new Blob([exp.bytes], { type: 'application/octet-stream' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'tapeforge-' + state.circuitName.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.txt';
+    a.download = 'tapeforge-' + state.circuitName.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.bin';
     document.body.appendChild(a);
     a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
   });
   $('btn-copy').addEventListener('click', function () {
-    var text = TF.exportNetlist(state.circuit, state.circuitName);
-    var done = function () { $('btn-copy').textContent = '✓ Copied'; setTimeout(function () { $('btn-copy').textContent = '⧉ Copy'; }, 1500); };
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
-    else { fallbackCopy(text); done(); }
+    var exp = TF.exportTapeout(state.circuit);
+    if (exp.error) { window.alert('Cannot export: ' + exp.error); return; }
+    var done = function () { $('btn-copy').textContent = '✓ Copied'; setTimeout(function () { $('btn-copy').textContent = '⧉ Copy hex'; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(exp.hex).then(done, function () { fallbackCopy(exp.hex); done(); });
+    else { fallbackCopy(exp.hex); done(); }
   });
   function fallbackCopy(text) {
     var ta = document.createElement('textarea');
@@ -1531,12 +2213,23 @@ footer p { margin: 0; }
   }
 
   // ------------------------------------------------------------ init
-  // Test/debug handle (used by smoke-test.js). Harmless in the browser.
+  // Test/debug handle (used by smoke-test.js and test.js). Harmless in the browser.
   window.TapeForgeApp = {
-    loadTemplate: loadTemplate, runVerify: runVerify,
+    loadTemplate: loadTemplate, runVerify: runVerify, renderAll: renderAll,
     undo: undo, redo: redo, refreshLive: refreshLive,
+    deleteWire: deleteWire,
+    selectProcessor: function (i) { selectedProc = i; renderCost(); },
+    cheapestAvailableFor: function (gates) { return cheapestAvailable(gates); },
+    validatePinName: validatePinName,
     getState: function () { return state; },
     getProcessors: function () { return processors; },
+    getFees: function () {
+      return {
+        protocolFeeWei: liveFees.protocolFeeWei.toString(),
+        tapeoutFeeWei: liveFees.tapeoutFeeWei.toString(),
+        deployFeeWei: liveFees.deployFeeWei.toString()
+      };
+    },
     isLive: function () { return dataLive; }
   };
   loadTemplate(TF.TEMPLATES.find(function (t) { return t.id === 'consensus'; }));

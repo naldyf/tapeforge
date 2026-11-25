@@ -31,6 +31,8 @@ check('style block is the chip-fab theme', styleBlocks[0] && styleBlocks[0].incl
 check('first script is circuit.js (TapeForgeCircuit)', scriptBlocks[0] && scriptBlocks[0].includes('TapeForgeCircuit'));
 check('second script is app.js (TapeForgeApp)', scriptBlocks[1] && scriptBlocks[1].includes('TapeForgeApp'));
 check('hint bar present', html.includes('id="hint-bar"'));
+check('export status + payload hex present', html.includes('id="export-status"') && html.includes('id="payload-hex"'));
+check('deploy-fee label span present', html.includes('id="lbl-open-fee-text"'));
 check('zoom controls present', html.includes('id="btn-zoom-fit"') && html.includes('id="zoom-label"') && html.includes('id="canvas-size"'));
 const scripts = scriptBlocks.map((b) => b.replace(/<\/?script>/g, ''));
 check('inlined circuit.js is byte-identical to circuit.js',
@@ -91,10 +93,15 @@ function makeSandbox(fetchImpl) {
   check('canvas size readout present', el['canvas-size'].textContent.includes('px'));
   check('processor table lists 9898, XBOT, ViperX',
     el['processor-body'].innerHTML.includes('9898') && el['processor-body'].innerHTML.includes('XBOT') && el['processor-body'].innerHTML.includes('ViperX'));
-  check('netlist has 12 gate lines', (el['netlist-view'].textContent.match(/^G\d+ = NAND\(/gm) || []).length === 12);
+  check('netlist has 12 gate lines (stable ids)', (el['netlist-view'].textContent.match(/^g\d+ = NAND\(/gm) || []).length === 12);
   check('data source says cached snapshot', el['data-source'].innerHTML.includes('cached snapshot'));
-  check('cost total for 12 gates on 9898 = 0.001312 OKB',
-    el['cost-breakdown'].innerHTML.includes('0.001312 OKB'));
+  check('cost total for 12 gates on 9898 = 0.001972 OKB (12*1e12 + 660e12 + 1300e12)',
+    el['cost-breakdown'].innerHTML.includes('0.001972 OKB'));
+  check('export status element present and says tape-out ready',
+    el['export-status'].innerHTML.includes('Tape-out ready'));
+  check('payload hex element present', (el['payload-hex'].textContent || '').length > 10);
+  check('deploy-fee label shows the live deployFee',
+    (el['lbl-open-fee-text'].textContent || '').includes('0.00000000001 OKB'));
 
   console.log('\n[deweb file: template load + verify]');
   const app = sb.window.TapeForgeApp;

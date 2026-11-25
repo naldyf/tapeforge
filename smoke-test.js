@@ -70,9 +70,16 @@ function assertCommon(el, label) {
   check('canvas shows CONSENSUS output', el.canvas.innerHTML.includes('CONSENSUS'));
   check('processor table lists 9898, XBOT, ViperX',
     el['processor-body'].innerHTML.includes('9898') && el['processor-body'].innerHTML.includes('XBOT') && el['processor-body'].innerHTML.includes('ViperX'));
-  check('netlist has 12 gate lines', (el['netlist-view'].textContent.match(/^G\d+ = NAND\(/gm) || []).length === 12);
-  check('netlist assigns CONSENSUS', el['netlist-view'].textContent.includes('CONSENSUS = G'));
-  check('netlist has tape-out steps', el['netlist-view'].textContent.includes('To tape this out'));
+  check('netlist has 12 gate lines (stable ids)', (el['netlist-view'].textContent.match(/^g\d+ = NAND\(/gm) || []).length === 12);
+  check('netlist assigns CONSENSUS (draft, stable id + name comment)',
+    el['netlist-view'].textContent.includes('out0 = ') && el['netlist-view'].textContent.includes('"CONSENSUS"'));
+  check('netlist is labelled DRAFT ONLY', el['netlist-view'].textContent.includes('DRAFT ONLY'));
+  check('export status says tape-out ready', el['export-status'].innerHTML.includes('Tape-out ready'));
+  check('payload hex shown', (el['payload-hex'].textContent || '').length > 10);
+  check('download/copy enabled for a valid circuit',
+    el['btn-download'].disabled === false && el['btn-copy'].disabled === false);
+  check('deploy-fee label shows the live deployFee (0.00000000001 OKB)',
+    (el['lbl-open-fee-text'].textContent || '').includes('0.00000000001 OKB'));
 }
 
 (async () => {
@@ -82,9 +89,13 @@ function assertCommon(el, label) {
   await sleep(2500); // let the background refresh fail and fall back
   assertCommon(el1, 'snapshot fallback (RPC down)');
   check('data source says cached snapshot', el1['data-source'].innerHTML.includes('cached snapshot'));
-  check('cost total for 12 gates on 9898 = 0.001312 OKB',
-    el1['cost-breakdown'].innerHTML.includes('0.001312 OKB'),
+  check('cost total for 12 gates on 9898 = 0.001972 OKB (12*1e12 + 660e12 + 1300e12)',
+    el1['cost-breakdown'].innerHTML.includes('0.001972 OKB'),
     el1['cost-breakdown'].innerHTML.replace(/<[^>]+>/g, ' ').slice(0, 200));
+  check('cost breakdown shows the protocol fee row',
+    el1['cost-breakdown'].innerHTML.includes('Protocol fee (once per mint)'));
+  check('cost breakdown shows the transistor cost row',
+    el1['cost-breakdown'].innerHTML.includes('Transistor cost'));
   check('cheapest processor is tagged', el1['processor-body'].innerHTML.includes('cheapest'));
   check('9898 tagged as proven fab', el1['processor-body'].innerHTML.includes('proven fab'));
 
@@ -97,7 +108,7 @@ function assertCommon(el, label) {
     { address: '0x69f663931209096037474d7c20402232e5c762ca', transistor: '0x3fa393d3081accff9e7989619b688235f6d3ee3f', priceWei: '660000000000000', minted: 2100000, cap: 2100000, circuits: 1410 },
     { address: '0xa5fc69Ca2D3d462CCa204D894D85ac8071c4F0f0', transistor: '0x7bE7280e31984d18f62218519985EC5DcCa751De', priceWei: '10000000000000000', minted: 41, cap: 1000000000, circuits: 6 },
     { address: '0xb57b56034e2dc25161e2512CfC40b24EA3bee1Fb', transistor: '0xfce5366485140045e95ebdba88ad775fc4aad79f', priceWei: '0', minted: 158, cap: 158, circuits: 4 },
-    { address: '0x99081e1d0ce916cd5b2c53e769dfc3b000bfe9a4', transistor: '0x80a7eb72bc4e559c47304efe6a0f6e73717df5cb', priceWei: '1', minted: 281, cap: 1e24, circuits: 19 },
+    { address: '0x99081e1d0ce916cd5b2c53e769dfc3b000bfe9a4', transistor: '0x80a7eb72bc4e559c47304efe6a0f6e73717df5cb', priceWei: '1', minted: 281, cap: '1000000000000000000000000', circuits: 19 },
   ];
   function liveFetch(url, opts) {
     const body = JSON.parse(opts.body);
@@ -110,13 +121,16 @@ function assertCommon(el, label) {
         const data = req.params[0].data;
         const proc = LIVE.find((p) => p.address.toLowerCase() === to || p.transistor.toLowerCase() === to);
         let result = '0x' + '0'.repeat(64);
-        if (proc) {
-          if (data === '0x6fbd1719') result = addrWord(proc.transistor);
-          else if (data === '0x6817c76c') result = word32(proc.priceWei);
-          else if (data === '0x61b8ce8c') result = word32(proc.circuits);
-          else if (data === '0x4f02c420') result = word32(proc.minted);
-          else if (data === '0x8f770ad0') result = word32(proc.cap);
-        }
+        if (data === '0x6fbd1719') result = proc ? addrWord(proc.transistor) : result;
+        else if (data === '0x6817c76c') result = proc ? word32(proc.priceWei) : result;
+        else if (data === '0x61b8ce8c') result = proc ? word32(proc.circuits) : result;
+        else if (data === '0x4f02c420') result = proc ? word32(proc.minted) : result;
+        else if (data === '0x8f770ad0') result = proc ? word32(proc.cap) : result;
+        // New fee selectors (audit §3): protocolFee on the token,
+        // TAPEOUT_FEE on the processor, deployFee on the factory.
+        else if (data === '0xb0e21e8a') result = word32(660000000000000);
+        else if (data === '0xadfb2b69') result = word32(1300000000000000);
+        else if (data === '0xeb2a5d2c') result = word32(10000000);
         return { jsonrpc: '2.0', id: req.id, result };
       }
       return { jsonrpc: '2.0', id: req.id, result: '0x' + '0'.repeat(64) };
@@ -131,8 +145,12 @@ function assertCommon(el, label) {
   check('live block number shown', el2['data-source'].innerHTML.includes('83,886,080'));
   check('9898 price updated to 0.000002 OKB', el2['processor-body'].innerHTML.includes('0.000002 OKB'));
   check('9898 circuits updated to 2,000', el2['processor-body'].innerHTML.includes('2,000'));
-  check('cost total re-priced: 12 x 0.000002 + 0.0013 = 0.001324 OKB',
-    el2['cost-breakdown'].innerHTML.includes('0.001324 OKB'));
+  check('cost total re-priced: 12 x 0.000002 + 0.00066 + 0.0013 = 0.001984 OKB',
+    el2['cost-breakdown'].innerHTML.includes('0.001984 OKB'));
+  check('deploy-fee label shows the live deployFee after refresh',
+    (el2['lbl-open-fee-text'].textContent || '').includes('0.00000000001 OKB'));
+  check('live fees read from the mock (protocol 0.00066 + tape-out 0.0013 in the total)',
+    el2['cost-breakdown'].innerHTML.includes('0.00066 OKB') && el2['cost-breakdown'].innerHTML.includes('0.0013 OKB'));
 
   // ---- verify flow in the DOM (adder, exhaustive) ----
   console.log('\n[verify flow]');
@@ -150,7 +168,7 @@ function assertCommon(el, label) {
     app.loadTemplate(adder);
     check('adder loads: 68 gates in status', el1['live-status'].innerHTML.includes('68 gates · 16 inputs · 9 outputs'));
     check('adder renders 68 NAND gates', (el1.canvas.innerHTML.match(/>NAND</g) || []).length === 68);
-    check('adder netlist has 68 gate lines', (el1['netlist-view'].textContent.match(/^G\d+ = NAND\(/gm) || []).length === 68);
+    check('adder netlist has 68 gate lines', (el1['netlist-view'].textContent.match(/^g\d+ = NAND\(/gm) || []).length === 68);
     el1['btn-verify']._listeners.click[0](); // the real Verify button wiring
     check('adder verify summary: 65,536/65,536 pass', el1['verify-summary'].innerHTML.includes('65,536/65,536 cases pass'));
     check('verify table rendered with S0 column', el1['verify-table-wrap'].innerHTML.includes('<table>') && el1['verify-table-wrap'].innerHTML.includes('S0'));
@@ -187,6 +205,75 @@ function assertCommon(el, label) {
     check('hint bar hides on ✕', el1['hint-bar']._attrs.hidden === '');
     check('Delete button disabled when nothing selected',
       el1['btn-delete'].disabled === true);
+  }
+
+  // ---- audit regression flows (verify staleness, expected-function
+  // preservation, export gating, sold-out processor) ----
+  console.log('\n[audit regression flows]');
+  {
+    const app = sb1.window.TapeForgeApp;
+    const TF2 = sb1.window.TapeForgeCircuit;
+    const con = TF2.TEMPLATES.find((t) => t.id === 'consensus');
+    // Stale verify: verify, then delete a wire -> summary + table cleared.
+    app.loadTemplate(con);
+    app.runVerify();
+    check('consensus verifies 8/8 before the edit', el1['verify-summary'].innerHTML.includes('8/8 cases pass'));
+    check('consensus truth table rendered', el1['verify-table-wrap'].innerHTML.includes('<table>'));
+    app.deleteWire('output:out0');
+    check('stale verify summary cleared after deleting a wire',
+      el1['verify-summary'].innerHTML.includes('Press') && !el1['verify-summary'].innerHTML.includes('cases pass'));
+    check('stale truth table cleared after deleting a wire', el1['verify-table-wrap'].innerHTML === '');
+    // The same edit must NOT verify as a pass: disconnecting the output is
+    // a structural error, not 8/8 pass.
+    app.runVerify();
+    check('disconnected output verifies as an error, not a pass',
+      el1['verify-summary'].innerHTML.includes('Cannot verify') && !el1['verify-summary'].innerHTML.includes('cases pass'));
+    app.undo(); // wire back
+    check('undo restores the wire and clears the stale error',
+      el1['verify-summary'].innerHTML.includes('Press'));
+    // Expected function survives a rename (ids unchanged) …
+    app.getState().circuit.inputs[0].name = 'RISK2';
+    app.renderAll();
+    app.runVerify();
+    check('renaming a pin keeps the expected function (still 8/8)',
+      el1['verify-summary'].innerHTML.includes('8/8 cases pass'));
+    // … but adding a pin drops it: the interface changed, so verify must
+    // report "simulated, no expected function" with NO pass count.
+    el1['btn-add-input']._listeners.click[0]();
+    app.runVerify();
+    check('adding a pin drops the expected function (no pass count)',
+      el1['verify-summary'].innerHTML.includes('no expected function') && !el1['verify-summary'].innerHTML.includes('cases pass'));
+    check('dropped-function note names the pin interface change',
+      el1['verify-summary'].innerHTML.includes('Pin interface changed'));
+    // Adding a gate keeps the expected function (pin ids unchanged) but the
+    // new gate is unwired, so verify errors instead of passing.
+    app.loadTemplate(con);
+    el1['btn-add-gate']._listeners.click[0]();
+    app.runVerify();
+    check('unwired added gate verifies as an error, not a pass',
+      el1['verify-summary'].innerHTML.includes('Cannot verify') && !el1['verify-summary'].innerHTML.includes('cases pass'));
+    // Export gating: an invalid circuit disables Download/Copy and names
+    // the blocking reason; the draft preview stays available.
+    app.loadTemplate(con);
+    app.deleteWire('output:out0');
+    check('export status names the blocking reason for an invalid circuit',
+      el1['export-status'].innerHTML.includes('Not tape-out ready') && el1['export-status'].innerHTML.includes('out0'));
+    check('download disabled for an invalid circuit', el1['btn-download'].disabled === true);
+    check('copy disabled for an invalid circuit', el1['btn-copy'].disabled === true);
+    check('draft preview stays available for an invalid circuit',
+      el1['netlist-view'].textContent.includes('DRAFT ONLY'));
+    app.undo();
+    check('export re-enabled once the circuit is valid again',
+      el1['btn-download'].disabled === false && el1['export-status'].innerHTML.includes('Tape-out ready'));
+    // Sold-out processor: selecting ViperX shows "unavailable (sold out)"
+    // and no normal quote.
+    app.selectProcessor(4);
+    check('sold-out ViperX shows "unavailable (sold out)", no normal quote',
+      el1['cost-breakdown'].innerHTML.includes('unavailable (sold out)') && !el1['cost-breakdown'].innerHTML.includes('Estimated total'));
+    check('ViperX row is tagged sold out', el1['processor-body'].innerHTML.includes('sold out'));
+    app.selectProcessor(0);
+    check('selecting 9898 again restores the normal quote',
+      el1['cost-breakdown'].innerHTML.includes('Estimated total'));
   }
 
   console.log(failures === 0 ? '\nALL SMOKE TESTS PASSED' : `\n${failures} SMOKE TEST(S) FAILED`);
